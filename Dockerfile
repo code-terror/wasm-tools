@@ -11,9 +11,9 @@ RUN git clone https://github.com/bytecodealliance/wasm-tools.git
 WORKDIR /wasm-tools/fuzz/
 RUN ${HOME}/.cargo/bin/cargo fuzz build
 WORKDIR /
-COPY Mayhemfile Mayhemfile
+COPY /Mayhem /Mayhem
 
 # Package Stage
 FROM ubuntu:20.04
 COPY --from=builder /wasm-tools/target/x86_64-unknown-linux-gnu/release/* /
-COPY --from=builder /Mayhemfile /Mayhemfile
+COPY --from=builder /Mayhem /Mayhem
