@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: roundtrip-valid-module
+
+cmds:
+  - cmd: ./roundtrip-valid-module
+    libfuzzer: true

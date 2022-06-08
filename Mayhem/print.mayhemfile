@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: print
+
+cmds:
+  - cmd: ./print
+    libfuzzer: true

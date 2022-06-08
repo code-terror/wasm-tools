@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: mutate
+
+cmds:
+  - cmd: ./mutate
+    libfuzzer: true

@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: validate-valid-module
+
+cmds:
+  - cmd: ./validate-valid-module
+    libfuzzer: true

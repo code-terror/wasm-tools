@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: text-lexer
+
+cmds:
+  - cmd: ./text-lexer
+    libfuzzer: true

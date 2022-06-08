@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: text-parser
+
+cmds:
+  - cmd: ./text-parser
+    libfuzzer: true

@@ -1,0 +1,6 @@
+project: code-terror/wasm-tools
+target: validate-ensure-termination
+
+cmds:
+  - cmd: ./validate-ensure-termination
+    libfuzzer: true

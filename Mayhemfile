@@ -1,6 +1,0 @@
-project: code-terror/http
-target: fuzz_http
-
-cmds:
-  - cmd: ./fuzz_http
-    libfuzzer: true
