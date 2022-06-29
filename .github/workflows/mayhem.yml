@@ -137,7 +137,7 @@ jobs:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
           args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.printvm_mayhemfile}} --duration 300
           sarif-output: sarif
-          
+
       - name: Start analysis for labels
         uses: ForAllSecure/mcode-action@v1
         with:
