@@ -89,13 +89,6 @@ jobs:
           args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.print_mayhemfile}} --duration 300
           sarif-output: sarif
       
-      - name: Start analysis for printvm
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.printvm_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
       - name: Start analysis for roundtripvm
         uses: ForAllSecure/mcode-action@v1
         with:
@@ -138,6 +131,13 @@ jobs:
           args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.validatevm_mayhemfile}} --duration 300
           sarif-output: sarif
       
+      - name: Start analysis for printvm
+        uses: ForAllSecure/mcode-action@v1
+        with:
+          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
+          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.printvm_mayhemfile}} --duration 300
+          sarif-output: sarif
+          
       - name: Start analysis for labels
         uses: ForAllSecure/mcode-action@v1
         with:
