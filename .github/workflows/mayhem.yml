@@ -3,40 +3,15 @@ on:
   push:
   pull_request:
   workflow_dispatch:
-  workflow_call:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
-  incrementalp_mayhemfile: Mayhem/incremental-parse.mayhemfile
-  mutate_mayhemfile: Mayhem/mutate.mayhemfile
-  print_mayhemfile: Mayhem/print.mayhemfile
-  printvm_mayhemfile: Mayhem/print-valid-module.mayhemfile
-  roundtrip_mayhemfile: Mayhem/roundtrip.mayhemfile
-  roundtripvm_mayhemfile: Mayhem/roundtrip-valid-module.mayhemfile
-  textl_mayhemfile: Mayhem/text-lexer.mayhemfile
-  textp_mayhemfile: Mayhem/text-parser.mayhemfile
-  validate_mayhemfile: Mayhem/validate.mayhemfile
-  validateet_mayhemfile: Mayhem/validate-ensure-termination.mayhemfile
-  validatevm_mayhemfile: Mayhem/validate-valid-module.mayhemfile
-  
 
 jobs:
   build:
-    name: ${{ matrix.os }} shared=${{ matrix.shared }} ${{ matrix.build_type }}
-    runs-on: ${{ matrix.os }}
-    permissions:
-      packages: write
-      security-events: write
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-        shared: [false]
-        build_type: [Release]
-        include:
-          - os: ubuntu-latest
-            triplet: x64-linux
-
+    name: 'build mayhem fuzzing container'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
 
@@ -57,95 +32,39 @@ jobs:
         uses: docker/build-push-action@ad44023a93711e3deb337508980b4b5e9bcdc5dc
         with:
           context: .
+          file: mayhem/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-      
-      - name: Start analysis for roundtrip
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.roundtrip_mayhemfile}} --duration 300
-          sarif-output: sarif
 
-      - name: Start analysis for incrementalp
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.incrementalp_mayhemfile}} --duration 300
-          sarif-output: sarif
+    outputs:
+      image: ${{ steps.meta.outputs.tags }}
 
-      - name: Start analysis for mutate
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.mutate_mayhemfile}} --duration 300
-          sarif-output: sarif     
-      
-      - name: Start analysis for textl
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.textl_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for textp
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.textp_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for validate
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.validate_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for validateet
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.validateet_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for validatevm
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.validatevm_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for print
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.print_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for printvm
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.printvm_mayhemfile}} --duration 300
-          sarif-output: sarif
-      
-      - name: Start analysis for roundtripvm
-        uses: ForAllSecure/mcode-action@v1
-        with:
-          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.roundtripvm_mayhemfile}} --duration 300
-          sarif-output: sarif
+  mayhem:
+    needs: build
+    name: 'fuzz ${{ matrix.mayhemfile }}'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        mayhemfile:
+          - Mayhem/incremental-parse.mayhemfile
+          - Mayhem/mutate.mayhemfile
+          - Mayhem/print.mayhemfile
+          - Mayhem/print-valid-module.mayhemfile
+          - Mayhem/roundtrip.mayhemfile
+          - Mayhem/roundtrip-valid-module.mayhemfile
+          - Mayhem/text-lexer.mayhemfile
+          - Mayhem/text-parser.mayhemfile
+          - Mayhem/validate.mayhemfile
+          - Mayhem/validate-ensure-termination.mayhemfile
+          - Mayhem/validate-valid-module.mayhemfile
 
-      - name: Start analysis for labels
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Start analysis for ${{ matrix.mayhemfile }}
         uses: ForAllSecure/mcode-action@v1
         with:
           mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
-          args: --image ${{ steps.meta.outputs.tags }} --file ${{ env.labels_mayhemfile}} --duration 300
-          sarif-output: sarif   
-      
-      - name: Upload SARIF file(s)
-        uses: github/codeql-action/upload-sarif@v1
-        with:
-          sarif_file: sarif
+          args: --image ${{ needs.build.outputs.image }} --file ${{ matrix.mayhemfile }} --duration 300
+          sarif-output: sarif
