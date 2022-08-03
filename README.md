@@ -44,6 +44,7 @@ programmatically as well:
 | `wasm-tools shrink` | [wasm-shrink] | Shrink a wasm file while preserving a predicate |
 | `wasm-tools dump` |   | Print debugging information about the binary format |
 | `wasm-tools objdump` |   | Print debugging information about section headers |
+| `wasm-tools strip` |   | Remove custom sections from a WebAssembly file |
 
 [wasmparser]: https://crates.io/crates/wasmparser
 [wat]: https://crates.io/crates/wat
@@ -75,6 +76,10 @@ implemented in this repository as well. These libraries are:
 
 It's recommended to use the libraries directly rather than the CLI tooling when
 embedding into a separate project.
+
+# C/C++ bindings
+
+Using the `CMakeLists.txt` in `crates/c-api`, `wasm-tools` can be used from the [`wasm-tools.h` header](crates/c-api/include/wasm-tools.h).
 
 # License
 

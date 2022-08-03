@@ -54,7 +54,7 @@ pub mod types;
 use self::component::*;
 pub use self::core::ValidatorResources;
 use self::core::*;
-use self::types::{TypeList, Types};
+use self::types::{TypeList, Types, TypesRef};
 pub use func::FuncValidator;
 
 fn check_max(cur_len: usize, amt_added: u32, max: usize, desc: &str, offset: usize) -> Result<()> {
@@ -364,6 +364,30 @@ impl Validator {
         }
 
         Ok(last_types.unwrap())
+    }
+
+    /// Gets the types known by the validator so far within the
+    /// module/component `level` modules/components up from the
+    /// module/component currently being parsed.
+    ///
+    /// For instance, calling `validator.types(0)` will get the types of the
+    /// module/component currently being parsed, and `validator.types(1)` will
+    /// get the types of the component containing that module/component.
+    ///
+    /// Returns `None` if there is no module/component that many levels up.
+    pub fn types(&self, mut level: usize) -> Option<TypesRef> {
+        if let Some(module) = &self.module {
+            if level == 0 {
+                return Some(TypesRef::from_module(&self.types, &module.module));
+            } else {
+                level -= 1;
+            }
+        }
+
+        self.components
+            .iter()
+            .nth_back(level)
+            .map(|component| TypesRef::from_component(&self.types, component))
     }
 
     /// Convenience function to validate a single [`Payload`].
@@ -831,8 +855,10 @@ impl Validator {
 
         let state = self.module.as_mut().unwrap();
 
+        let (index, ty) = state.next_code_index_and_type(offset)?;
         Ok(FuncValidator::new(
-            state.next_code_entry_type(offset)?,
+            index,
+            ty,
             0,
             ValidatorResources(state.module.arc().clone()),
             &self.features,
@@ -922,10 +948,7 @@ impl Validator {
             "core alias",
             |_, _, _, _| Ok(()), // maximums checked via `add_alias`
             |components, types, _, alias, offset| -> Result<(), BinaryReaderError> {
-                components
-                    .last_mut()
-                    .unwrap()
-                    .add_core_alias(alias, types, offset)
+                ComponentState::add_core_alias(components, alias, types, offset)
             },
         )
     }
@@ -945,8 +968,9 @@ impl Validator {
                 Ok(())
             },
             |components, types, features, ty, offset| {
-                let current = components.last_mut().unwrap();
-                current.add_core_type(ty, features, types, offset, false /* checked above */)
+                ComponentState::add_core_type(
+                    components, ty, features, types, offset, false, /* checked above */
+                )
             },
         )
     }
@@ -1203,6 +1227,14 @@ impl Validator {
             }
             State::Component => {
                 let mut component = self.components.pop().unwrap();
+
+                // Validate that all values were used for the component
+                if let Some(index) = component.values.iter().position(|(_, used)| !*used) {
+                    return Err(BinaryReaderError::new(
+                        format!("value index {index} was not used as part of an instantiation, start function, or export"),
+                        offset,
+                    ));
+                }
 
                 // If there's a parent component, pop the stack, add it to the parent,
                 // and continue to validate the component

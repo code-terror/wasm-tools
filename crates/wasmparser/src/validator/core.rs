@@ -109,7 +109,7 @@ impl ModuleState {
         Ok(())
     }
 
-    pub fn next_code_entry_type(&mut self, offset: usize) -> Result<u32> {
+    pub fn next_code_index_and_type(&mut self, offset: usize) -> Result<(u32, u32)> {
         let index = self
             .code_section_index
             .get_or_insert(self.module.num_imported_functions as usize);
@@ -124,7 +124,7 @@ impl ModuleState {
         let ty = self.module.functions[*index];
         *index += 1;
 
-        Ok(ty)
+        Ok(((*index - 1) as u32, ty))
     }
 
     pub fn add_global(
@@ -158,10 +158,10 @@ impl ModuleState {
             DataKind::Passive => Ok(()),
             DataKind::Active {
                 memory_index,
-                init_expr,
+                offset_expr,
             } => {
                 let ty = self.module.memory_at(memory_index, offset)?.index_type();
-                self.check_init_expr(&init_expr, ty, features, types, offset)
+                self.check_init_expr(&offset_expr, ty, features, types, offset)
             }
         }
     }
@@ -187,7 +187,7 @@ impl ModuleState {
         match e.kind {
             ElementKind::Active {
                 table_index,
-                init_expr,
+                offset_expr,
             } => {
                 let table = self.module.table_at(table_index, offset)?;
                 if e.ty != table.element_type {
@@ -197,7 +197,7 @@ impl ModuleState {
                     ));
                 }
 
-                self.check_init_expr(&init_expr, ValType::I32, features, types, offset)?;
+                self.check_init_expr(&offset_expr, ValType::I32, features, types, offset)?;
             }
             ElementKind::Passive | ElementKind::Declared => {
                 if !features.bulk_memory {
@@ -529,14 +529,13 @@ impl Module {
         Ok(())
     }
 
-    fn type_at<'a>(&self, idx: u32, types: &'a TypeList, offset: usize) -> Result<&'a Type> {
-        match self.types.get(idx as usize) {
-            Some(id) => Ok(&types[*id]),
-            None => Err(BinaryReaderError::new(
+    pub fn type_at(&self, idx: u32, offset: usize) -> Result<TypeId> {
+        self.types.get(idx as usize).copied().ok_or_else(|| {
+            BinaryReaderError::new(
                 format!("unknown type {}: type index out of bounds", idx),
                 offset,
-            )),
-        }
+            )
+        })
     }
 
     fn func_type_at<'a>(
@@ -545,7 +544,7 @@ impl Module {
         types: &'a TypeList,
         offset: usize,
     ) -> Result<&'a FuncType> {
-        self.type_at(type_index, types, offset)?
+        types[self.type_at(type_index, offset)?]
             .as_func_type()
             .ok_or_else(|| {
                 BinaryReaderError::new(

@@ -173,7 +173,7 @@ impl Encoder {
         match &instance.kind {
             CoreInstanceKind::Instantiate { module, args } => {
                 self.core_instances.instantiate(
-                    (*module).into(),
+                    module.into(),
                     args.iter().map(|arg| (arg.name, (&arg.kind).into())),
                 );
             }
@@ -197,6 +197,10 @@ impl Encoder {
             } => {
                 self.core_aliases
                     .instance_export((*instance).into(), (*kind).into(), name);
+            }
+            CoreAliasTarget::Outer { outer, index, kind } => {
+                self.core_aliases
+                    .outer((*outer).into(), (*kind).into(), (*index).into());
             }
         }
 
@@ -230,7 +234,7 @@ impl Encoder {
             InstanceKind::Import { .. } => unreachable!("should be expanded already"),
             InstanceKind::Instantiate { component, args } => {
                 self.instances.instantiate(
-                    (*component).into(),
+                    component.into(),
                     args.iter().map(|arg| {
                         let (kind, index) = (&arg.kind).into();
                         (arg.name, kind, index)
@@ -415,9 +419,6 @@ impl From<core::ValType<'_>> for wasm_encoder::ValType {
             core::ValType::F64 => Self::F64,
             core::ValType::V128 => Self::V128,
             core::ValType::Ref(r) => r.into(),
-            core::ValType::Rtt(..) => {
-                todo!("encoding of GC proposal types not yet implemented")
-            }
         }
     }
 }
@@ -458,17 +459,18 @@ impl From<core::TableType<'_>> for wasm_encoder::TableType {
 
 impl From<core::MemoryType> for wasm_encoder::MemoryType {
     fn from(ty: core::MemoryType) -> Self {
-        let (minimum, maximum, memory64) = match ty {
-            core::MemoryType::B32 { limits, shared: _ } => {
-                (limits.min.into(), limits.max.map(Into::into), false)
+        let (minimum, maximum, memory64, shared) = match ty {
+            core::MemoryType::B32 { limits, shared } => {
+                (limits.min.into(), limits.max.map(Into::into), false, shared)
             }
-            core::MemoryType::B64 { limits, shared: _ } => (limits.min, limits.max, true),
+            core::MemoryType::B64 { limits, shared } => (limits.min, limits.max, true, shared),
         };
 
         Self {
             minimum,
             maximum,
             memory64,
+            shared,
         }
     }
 }
@@ -548,6 +550,13 @@ impl From<Index<'_>> for u32 {
     }
 }
 
+impl<T> From<&ItemRef<'_, T>> for u32 {
+    fn from(i: &ItemRef<'_, T>) -> Self {
+        assert!(i.export_names.is_empty());
+        i.idx.into()
+    }
+}
+
 impl<T> From<&CoreTypeUse<'_, T>> for u32 {
     fn from(u: &CoreTypeUse<'_, T>) -> Self {
         match u {
@@ -569,7 +578,9 @@ impl<T> From<&ComponentTypeUse<'_, T>> for u32 {
 impl From<&ComponentValType<'_>> for wasm_encoder::ComponentValType {
     fn from(r: &ComponentValType) -> Self {
         match r {
-            ComponentValType::Primitive(p) => Self::Primitive((*p).into()),
+            ComponentValType::Inline(ComponentDefinedType::Primitive(p)) => {
+                Self::Primitive((*p).into())
+            }
             ComponentValType::Ref(i) => Self::Type(u32::from(*i)),
             ComponentValType::Inline(_) => unreachable!("should be expanded by now"),
         }
@@ -612,7 +623,7 @@ impl From<&ItemSigKind<'_>> for wasm_encoder::ComponentTypeRef {
             ItemSigKind::Component(c) => Self::Component(c.into()),
             ItemSigKind::CoreModule(m) => Self::Module(m.into()),
             ItemSigKind::Instance(i) => Self::Instance(i.into()),
-            ItemSigKind::Value(v) => Self::Value(v.into()),
+            ItemSigKind::Value(v) => Self::Value((&v.0).into()),
             ItemSigKind::Func(f) => Self::Func(f.into()),
             ItemSigKind::Type(TypeBounds::Eq(t)) => {
                 Self::Type(wasm_encoder::TypeBounds::Eq, (*t).into())
@@ -717,6 +728,16 @@ impl From<&ModuleType<'_>> for wasm_encoder::ModuleType {
                         todo!("encoding of GC proposal types not yet implemented")
                     }
                 },
+                ModuleTypeDecl::Alias(a) => match &a.target {
+                    CoreAliasTarget::Outer {
+                        outer,
+                        index,
+                        kind: CoreOuterAliasKind::Type,
+                    } => {
+                        encoded.alias_outer_core_type(u32::from(*outer), u32::from(*index));
+                    }
+                    _ => unreachable!("only outer type aliases are supported"),
+                },
                 ModuleTypeDecl::Import(i) => {
                     encoded.import(i.module, i.field, (&i.item.kind).into());
                 }
@@ -756,6 +777,14 @@ impl From<&ComponentExportKind<'_>> for (wasm_encoder::ComponentExportKind, u32)
             ComponentExportKind::Instance(i) => {
                 (wasm_encoder::ComponentExportKind::Instance, i.idx.into())
             }
+        }
+    }
+}
+
+impl From<CoreOuterAliasKind> for wasm_encoder::CoreOuterAliasKind {
+    fn from(kind: CoreOuterAliasKind) -> Self {
+        match kind {
+            CoreOuterAliasKind::Type => Self::Type,
         }
     }
 }

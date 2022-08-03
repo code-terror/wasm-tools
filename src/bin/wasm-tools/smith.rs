@@ -104,6 +104,8 @@ struct Config {
     min_exports: Option<usize>,
     #[clap(long = "max-exports")]
     max_exports: Option<usize>,
+    #[clap(long = "export-everything")]
+    export_everything: Option<bool>,
     #[clap(long = "min-element-segments")]
     min_element_segments: Option<usize>,
     #[clap(long = "max-element-segments")]
@@ -126,6 +128,10 @@ struct Config {
     max_memory_pages: Option<u64>,
     #[clap(long = "memory-max-size-required")]
     memory_max_size_required: Option<bool>,
+    #[clap(long = "max-table-elements")]
+    max_table_elements: Option<u32>,
+    #[clap(long = "table-max-size-required")]
+    table_max_size_required: Option<bool>,
     #[clap(long = "max-instances")]
     max_instances: Option<usize>,
     #[clap(long = "max-modules")]
@@ -178,6 +184,9 @@ struct Config {
     /// `--allowed-instructions numeric,control,parametric`
     #[clap(long = "allowed-instructions", use_value_delimiter = true)]
     allowed_instructions: Option<Vec<InstructionKind>>,
+    #[clap(long = "threads")]
+    #[serde(rename = "threads")]
+    threads_enabled: Option<bool>,
 }
 
 impl Opts {
@@ -267,6 +276,7 @@ impl wasm_smith::Config for CliAndJsonConfig {
         (max_globals, usize, 100),
         (min_exports, usize, 0),
         (max_exports, usize, 100),
+        (export_everything, bool, false),
         (min_element_segments, usize, 0),
         (max_element_segments, usize, 100),
         (min_data_segments, usize, 0),
@@ -277,12 +287,14 @@ impl wasm_smith::Config for CliAndJsonConfig {
         (min_tables, u32, 0),
         (max_tables, usize, 1),
         (memory_max_size_required, bool, false),
+        (max_table_elements, u32, 1_000_000),
+        (table_max_size_required, bool, false),
         (max_instances, usize, 10),
         (max_modules, usize, 10),
         (min_uleb_size, u8, 1),
-        (bulk_memory_enabled, bool, false),
-        (reference_types_enabled, bool, false),
-        (simd_enabled, bool, false),
+        (bulk_memory_enabled, bool, true),
+        (reference_types_enabled, bool, true),
+        (simd_enabled, bool, true),
         (relaxed_simd_enabled, bool, false),
         (exceptions_enabled, bool, false),
         (multi_value_enabled, bool, true),
@@ -295,6 +307,7 @@ impl wasm_smith::Config for CliAndJsonConfig {
         (max_type_size, u32, 1000),
         (canonicalize_nans, bool, false),
         (generate_custom_sections, bool, false),
+        (threads_enabled, bool, false),
     }
 
     fn max_memory_pages(&self, _is_64: bool) -> u64 {

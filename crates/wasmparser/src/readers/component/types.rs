@@ -1,6 +1,6 @@
 use crate::{
-    BinaryReader, ComponentAlias, ComponentImport, ComponentTypeRef, FuncType, Import, Result,
-    SectionIteratorLimited, SectionReader, SectionWithLimitedItems, Type, TypeRef,
+    Alias, BinaryReader, ComponentAlias, ComponentImport, ComponentTypeRef, FuncType, Import,
+    Result, SectionIteratorLimited, SectionReader, SectionWithLimitedItems, Type, TypeRef,
 };
 use std::ops::Range;
 
@@ -25,6 +25,8 @@ pub enum ModuleTypeDeclaration<'a> {
         /// The type reference of the export.
         ty: TypeRef,
     },
+    /// The module type declaration is for an alias.
+    Alias(Alias<'a>),
     /// The module type definition is for an import.
     Import(Import<'a>),
 }
@@ -164,7 +166,8 @@ impl PrimitiveValType {
         matches!(self, Self::String)
     }
 
-    pub(crate) fn is_subtype_of(&self, other: &Self) -> bool {
+    /// Determines if this primitive value type is a subtype of the given one.
+    pub fn is_subtype_of(&self, other: &Self) -> bool {
         // Subtyping rules according to
         // https://github.com/WebAssembly/component-model/blob/17f94ed1270a98218e0e796ca1dad1feb7e5c507/design/mvp/Subtyping.md
         self == other

@@ -1,5 +1,6 @@
 use super::{
-    Elements, FuncType, Instruction, InstructionKind::*, InstructionKinds, Module, ValType,
+    Elements, FuncType, GlobalInitExpr, Instruction, InstructionKind::*, InstructionKinds, Module,
+    ValType,
 };
 use arbitrary::{Result, Unstructured};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,7 +43,12 @@ macro_rules! instructions {
                 }
             )*
 
-            debug_assert!(cost > 0);
+            // If there aren't actually any candidate instructions due to
+            // various filters in place then return `None` to indicate the
+            // situation.
+            if cost == 0 {
+                return None;
+            }
 
             let i = u.int_in_range(0..=cost).ok()?;
             let idx = builder
@@ -73,7 +79,10 @@ macro_rules! instructions {
 // 2. The function to generate the instruction, given that we've made this
 //    choice.
 //
-// 3. An optional number used to weight how often this instruction is chosen.
+// 3. The `InstructionKind` the instruction belongs to; this allows filtering
+//    out instructions by category.
+//
+// 4. An optional number used to weight how often this instruction is chosen.
 //    Higher numbers are less likely to be chosen, and number specified must be
 //    less than 1000.
 instructions! {
@@ -684,7 +693,7 @@ impl CodeBuilderAllocations {
 
         let mut referenced_functions = BTreeSet::new();
         for (_, expr) in module.defined_globals.iter() {
-            if let Instruction::RefFunc(i) = *expr {
+            if let GlobalInitExpr::FuncRef(i) = *expr {
                 referenced_functions.insert(i);
             }
         }
