@@ -7,13 +7,9 @@ RUN apt-get update && \
 RUN curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 RUN ${HOME}/.cargo/bin/rustup default nightly
 RUN ${HOME}/.cargo/bin/cargo install -f cargo-fuzz
-RUN git clone https://github.com/bytecodealliance/wasm-tools.git
+ADD . /wasm-tools
 WORKDIR /wasm-tools/fuzz/
 RUN ${HOME}/.cargo/bin/cargo fuzz build
-WORKDIR /
-COPY /Mayhem /Mayhem
-
-
+#package stage
 FROM ubuntu:20.04
 COPY --from=builder /wasm-tools/target/x86_64-unknown-linux-gnu/release/* /
-COPY --from=builder /Mayhem /Mayhem

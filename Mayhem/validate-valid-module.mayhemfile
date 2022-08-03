@@ -1,4 +1,4 @@
-project: code-terror/wasm-tools
+project: wasm-tools
 target: validate-valid-module
 
 cmds:
