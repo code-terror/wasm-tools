@@ -1,7 +1,6 @@
 (component
   (import "a" (func))
   (import "b" (instance))
-
   (import "c" (instance
     (export "" (func))
   ))
@@ -9,6 +8,8 @@
     (import "" (core module))
     (export "" (func))
   ))
+  (type $t (func))
+  (import "e" (type (eq $t)))
 )
 
 (assert_invalid
@@ -96,6 +97,13 @@
   )
   "type index out of bounds")
 
+(assert_invalid
+  (component
+    (import "" (value string))
+  )
+  "value index 0 was not used as part of an instantiation, start function, or export")
+
 (component
   (import "" (value string))
+  (export "" (value 0))
 )

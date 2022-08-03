@@ -129,6 +129,12 @@ pub trait Config: 'static + std::fmt::Debug {
         100
     }
 
+    /// Export all WebAssembly objects in the module. This overrides
+    /// [`Config::min_exports`] and [`Config::max_exports`]. Defaults to false.
+    fn export_everything(&self) -> bool {
+        false
+    }
+
     /// The minimum number of element segments to generate. Defaults to 0.
     fn min_element_segments(&self) -> usize {
         0
@@ -214,6 +220,19 @@ pub trait Config: 'static + std::fmt::Debug {
     /// Whether every Wasm memory must have a maximum size specified. Defaults
     /// to `false`.
     fn memory_max_size_required(&self) -> bool {
+        false
+    }
+
+    /// The maximum, elements, of any table's initial or maximum size.
+    ///
+    /// Defaults to 1 million.
+    fn max_table_elements(&self) -> u32 {
+        1_000_000
+    }
+
+    /// Whether every Wasm table must have a maximum size specified. Defaults
+    /// to `false`.
+    fn table_max_size_required(&self) -> bool {
         false
     }
 
@@ -418,6 +437,18 @@ pub trait Config: 'static + std::fmt::Debug {
     fn generate_custom_sections(&self) -> bool {
         false
     }
+
+    /// Determines whether the threads proposal is enabled.
+    ///
+    /// The [threads proposal] involves shared linear memory, new atomic
+    /// instructions, and new `wait` and `notify` instructions.
+    ///
+    /// [threads proposal]: https://github.com/WebAssembly/threads/blob/master/proposals/threads/Overview.md
+    ///
+    /// Defaults to `false`.
+    fn threads_enabled(&self) -> bool {
+        false
+    }
 }
 
 /// The default configuration.
@@ -446,6 +477,7 @@ pub struct SwarmConfig {
     pub bulk_memory_enabled: bool,
     pub canonicalize_nans: bool,
     pub exceptions_enabled: bool,
+    pub export_everything: bool,
     pub max_aliases: usize,
     pub max_components: usize,
     pub max_data_segments: usize,
@@ -487,6 +519,10 @@ pub struct SwarmConfig {
     pub saturating_float_to_int_enabled: bool,
     pub sign_extension_enabled: bool,
     pub simd_enabled: bool,
+    pub threads_enabled: bool,
+    pub allowed_instructions: InstructionKinds,
+    pub max_table_elements: u32,
+    pub table_max_size_required: bool,
 }
 
 impl<'a> Arbitrary<'a> for SwarmConfig {
@@ -519,6 +555,18 @@ impl<'a> Arbitrary<'a> for SwarmConfig {
             max_nesting_depth: u.int_in_range(0..=10)?,
             saturating_float_to_int_enabled: u.arbitrary()?,
             sign_extension_enabled: u.arbitrary()?,
+            allowed_instructions: {
+                use flagset::Flags;
+                let mut allowed = Vec::new();
+                for kind in crate::core::InstructionKind::LIST {
+                    if u.arbitrary()? {
+                        allowed.push(*kind);
+                    }
+                }
+                InstructionKinds::new(&allowed)
+            },
+            table_max_size_required: u.arbitrary()?,
+            max_table_elements: u.int_in_range(0..=1_000_000)?,
 
             // These fields, unlike the ones above, are less useful to set.
             // They either make weird inputs or are for features not widely
@@ -547,6 +595,8 @@ impl<'a> Arbitrary<'a> for SwarmConfig {
             max_type_size: 1000,
             canonicalize_nans: false,
             available_imports: None,
+            threads_enabled: false,
+            export_everything: false,
         })
     }
 }
@@ -596,6 +646,10 @@ impl Config for SwarmConfig {
 
     fn max_exports(&self) -> usize {
         self.max_exports
+    }
+
+    fn export_everything(&self) -> bool {
+        self.export_everything
     }
 
     fn min_element_segments(&self) -> usize {
@@ -724,5 +778,21 @@ impl Config for SwarmConfig {
 
     fn canonicalize_nans(&self) -> bool {
         self.canonicalize_nans
+    }
+
+    fn threads_enabled(&self) -> bool {
+        self.threads_enabled
+    }
+
+    fn allowed_instructions(&self) -> InstructionKinds {
+        self.allowed_instructions
+    }
+
+    fn max_table_elements(&self) -> u32 {
+        self.max_table_elements
+    }
+
+    fn table_max_size_required(&self) -> bool {
+        self.table_max_size_required
     }
 }

@@ -110,3 +110,45 @@ impl<'a, K: Peek> Peek for ItemRef<'a, K> {
         "a component item reference"
     }
 }
+
+/// Convenience structure to parse `$f` or `(item $f)`.
+#[derive(Clone, Debug)]
+pub struct IndexOrRef<'a, K>(pub ItemRef<'a, K>);
+
+impl<'a, K> Parse<'a> for IndexOrRef<'a, K>
+where
+    K: Parse<'a> + Default,
+{
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        if parser.peek::<Index<'_>>() {
+            Ok(IndexOrRef(ItemRef {
+                kind: K::default(),
+                idx: parser.parse()?,
+                export_names: Vec::new(),
+            }))
+        } else {
+            Ok(IndexOrRef(parser.parens(|p| p.parse())?))
+        }
+    }
+}
+
+/// Convenience structure to parse `$f` or `(item $f)`.
+#[derive(Clone, Debug)]
+pub struct IndexOrCoreRef<'a, K>(pub CoreItemRef<'a, K>);
+
+impl<'a, K> Parse<'a> for IndexOrCoreRef<'a, K>
+where
+    K: Parse<'a> + Default,
+{
+    fn parse(parser: Parser<'a>) -> Result<Self> {
+        if parser.peek::<Index<'_>>() {
+            Ok(IndexOrCoreRef(CoreItemRef {
+                kind: K::default(),
+                idx: parser.parse()?,
+                export_name: None,
+            }))
+        } else {
+            Ok(IndexOrCoreRef(parser.parens(|p| p.parse())?))
+        }
+    }
+}

@@ -69,9 +69,9 @@ pub trait Translator {
         &mut self,
         e: &InitExpr<'_>,
         _ty: &wasmparser::ValType,
-        _ctx: InitExprKind,
-    ) -> Result<Instruction<'static>> {
-        init_expr(self.as_obj(), e)
+        ctx: InitExprKind,
+    ) -> Result<ConstExpr> {
+        init_expr(self.as_obj(), e, ctx)
     }
 
     fn translate_element(
@@ -153,6 +153,7 @@ pub fn memory_type(
         memory64: ty.memory64,
         minimum: ty.initial,
         maximum: ty.maximum,
+        shared: ty.shared,
     })
 }
 
@@ -196,15 +197,27 @@ pub fn global(t: &mut dyn Translator, global: Global, s: &mut GlobalSection) -> 
     Ok(())
 }
 
-pub fn init_expr(t: &mut dyn Translator, e: &InitExpr<'_>) -> Result<Instruction<'static>> {
+pub fn init_expr(t: &mut dyn Translator, e: &InitExpr<'_>, ctx: InitExprKind) -> Result<ConstExpr> {
     let mut e = e.get_operators_reader();
+    let mut offset_bytes = Vec::new();
     let op = e.read()?;
-    let op = t.translate_op(&op)?;
+    if let InitExprKind::ElementFunction = ctx {
+        match op {
+            Operator::RefFunc { .. }
+            | Operator::RefNull {
+                ty: wasmparser::ValType::FuncRef,
+                ..
+            }
+            | Operator::GlobalGet { .. } => {}
+            _ => return Err(Error::no_mutations_applicable()),
+        }
+    }
+    t.translate_op(&op)?.encode(&mut offset_bytes);
     match e.read()? {
         Operator::End if e.eof() => {}
         _ => return Err(Error::no_mutations_applicable()),
     }
-    Ok(op)
+    Ok(ConstExpr::raw(offset_bytes))
 }
 
 pub fn element(
@@ -216,10 +229,10 @@ pub fn element(
     let mode = match &element.kind {
         ElementKind::Active {
             table_index,
-            init_expr,
+            offset_expr,
         } => {
             offset = t.translate_init_expr(
-                init_expr,
+                offset_expr,
                 &wasmparser::ValType::I32,
                 InitExprKind::ElementOffset,
             )?;
@@ -241,15 +254,11 @@ pub fn element(
                 functions.push(t.remap(Item::Function, idx)?);
             }
             ElementItem::Expr(expr) => {
-                match t.translate_init_expr(&expr, &element.ty, InitExprKind::ElementFunction)? {
-                    Instruction::RefFunc(n) => {
-                        exprs.push(wasm_encoder::Element::Func(n));
-                    }
-                    Instruction::RefNull(_) => {
-                        exprs.push(wasm_encoder::Element::Null);
-                    }
-                    _ => return Err(Error::no_mutations_applicable()),
-                }
+                exprs.push(t.translate_init_expr(
+                    &expr,
+                    &element.ty,
+                    InitExprKind::ElementFunction,
+                )?);
             }
         }
     }
@@ -940,10 +949,10 @@ pub fn data(t: &mut dyn Translator, data: wasmparser::Data<'_>, s: &mut DataSect
     let mode = match &data.kind {
         DataKind::Active {
             memory_index,
-            init_expr,
+            offset_expr,
         } => {
             offset = t.translate_init_expr(
-                init_expr,
+                offset_expr,
                 &wasmparser::ValType::I32,
                 InitExprKind::DataOffset,
             )?;

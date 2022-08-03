@@ -209,15 +209,20 @@ impl<'a> BinaryReader<'a> {
         })
     }
 
-    pub(crate) fn read_external_kind(&mut self) -> Result<ExternalKind> {
-        match self.read_u8()? {
+    fn external_kind_from_byte(byte: u8, offset: usize) -> Result<ExternalKind> {
+        match byte {
             0x00 => Ok(ExternalKind::Func),
             0x01 => Ok(ExternalKind::Table),
             0x02 => Ok(ExternalKind::Memory),
             0x03 => Ok(ExternalKind::Global),
             0x04 => Ok(ExternalKind::Tag),
-            x => self.invalid_leading_byte(x, "external kind"),
+            x => Err(Self::invalid_leading_byte_error(x, "external kind", offset)),
         }
+    }
+
+    pub(crate) fn read_external_kind(&mut self) -> Result<ExternalKind> {
+        let offset = self.original_position();
+        Self::external_kind_from_byte(self.read_u8()?, offset)
     }
 
     fn component_external_kind_from_bytes(
@@ -352,7 +357,7 @@ impl<'a> BinaryReader<'a> {
         Ok(match self.read_u8()? {
             0x00 => ModuleTypeDeclaration::Import(self.read_import()?),
             0x01 => ModuleTypeDeclaration::Type(self.read_type()?),
-            // 0x02 => aliases might be implemented in the future
+            0x02 => ModuleTypeDeclaration::Alias(self.read_alias()?),
             0x03 => ModuleTypeDeclaration::Export {
                 name: self.read_string()?,
                 ty: self.read_type_ref()?,
@@ -651,13 +656,28 @@ impl<'a> BinaryReader<'a> {
     }
 
     pub(crate) fn read_alias(&mut self) -> Result<Alias<'a>> {
-        let kind = self.read_external_kind()?;
+        let offset = self.original_position();
+        let kind = self.read_u8()?;
 
         Ok(match self.read_u8()? {
             0x00 => Alias::InstanceExport {
-                kind,
+                kind: Self::external_kind_from_byte(kind, offset)?,
                 instance_index: self.read_var_u32()?,
                 name: self.read_string()?,
+            },
+            0x01 => Alias::Outer {
+                kind: match kind {
+                    0x10 => OuterAliasKind::Type,
+                    x => {
+                        return Err(Self::invalid_leading_byte_error(
+                            x,
+                            "outer alias kind",
+                            offset,
+                        ))
+                    }
+                },
+                count: self.read_var_u32()?,
+                index: self.read_var_u32()?,
             },
             x => return self.invalid_leading_byte(x, "alias"),
         })
@@ -839,11 +859,6 @@ impl<'a> BinaryReader<'a> {
     fn read_memarg(&mut self) -> Result<MemoryImmediate> {
         let flags_pos = self.original_position();
         let mut flags = self.read_var_u32()?;
-        let offset = if self.allow_memarg64 {
-            self.read_var_u64()?
-        } else {
-            u64::from(self.read_var_u32()?)
-        };
         let memory = if flags & (1 << 6) != 0 {
             flags ^= 1 << 6;
             self.read_var_u32()?
@@ -854,6 +869,11 @@ impl<'a> BinaryReader<'a> {
             return Err(BinaryReaderError::new("alignment too large", flags_pos));
         } else {
             flags as u8
+        };
+        let offset = if self.allow_memarg64 {
+            self.read_var_u64()?
+        } else {
+            u64::from(self.read_var_u32()?)
         };
         Ok(MemoryImmediate {
             align,

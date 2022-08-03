@@ -161,11 +161,11 @@ impl<'a> Dump<'a> {
                         }
                         ElementKind::Active {
                             table_index,
-                            init_expr,
+                            offset_expr,
                         } => {
                             write!(me.state, " table[{}]", table_index)?;
-                            me.print(init_expr.get_binary_reader().original_position())?;
-                            me.print_ops(init_expr.get_operators_reader())?;
+                            me.print(offset_expr.get_binary_reader().original_position())?;
+                            me.print_ops(offset_expr.get_operators_reader())?;
                             write!(me.state, "{} items", items.get_count())?;
                         }
                         ElementKind::Declared => {
@@ -189,11 +189,11 @@ impl<'a> Dump<'a> {
                         }
                         DataKind::Active {
                             memory_index,
-                            init_expr,
+                            offset_expr,
                         } => {
                             write!(me.state, "data memory[{}]", memory_index)?;
-                            me.print(init_expr.get_binary_reader().original_position())?;
-                            me.print_ops(init_expr.get_operators_reader())?;
+                            me.print(offset_expr.get_binary_reader().original_position())?;
+                            me.print_ops(offset_expr.get_operators_reader())?;
                         }
                     }
                     me.print_byte_header()?;
@@ -262,6 +262,9 @@ impl<'a> Dump<'a> {
                             ExternalKind::Memory => ("memory", inc(&mut i.core_memories)),
                             ExternalKind::Global => ("global", inc(&mut i.core_globals)),
                             ExternalKind::Tag => ("tag", inc(&mut i.core_tags)),
+                        },
+                        Alias::Outer { kind, .. } => match kind {
+                            OuterAliasKind::Type => ("type", inc(&mut i.core_types)),
                         },
                     };
                     write!(me.state, "core alias [{} {}] {:?}", kind, num, a)?;

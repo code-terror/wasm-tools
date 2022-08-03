@@ -359,10 +359,8 @@ macro_rules! id {
 
 #[cfg(feature = "wasm-module")]
 id! {
-    mod assert_expr;
     mod wast;
     mod wat;
-    pub use self::assert_expr::*;
     pub use self::wast::*;
     pub use self::wat::*;
 
@@ -382,6 +380,7 @@ pub mod kw {
     custom_keyword!(anyref);
     custom_keyword!(arg);
     custom_keyword!(array);
+    custom_keyword!(arrayref);
     custom_keyword!(assert_exception);
     custom_keyword!(assert_exhaustion);
     custom_keyword!(assert_invalid);
@@ -458,11 +457,12 @@ pub mod kw {
     custom_keyword!(ref_func = "ref.func");
     custom_keyword!(ref_null = "ref.null");
     custom_keyword!(register);
+    custom_keyword!(rec);
     custom_keyword!(result);
-    custom_keyword!(rtt);
     custom_keyword!(shared);
     custom_keyword!(start);
     custom_keyword!(r#struct = "struct");
+    custom_keyword!(sub);
     custom_keyword!(table);
     custom_keyword!(then);
     custom_keyword!(r#try = "try");
@@ -503,6 +503,8 @@ pub mod kw {
     custom_keyword!(post_return = "post-return");
     custom_keyword!(with);
     custom_keyword!(core);
+    custom_keyword!(true_ = "true");
+    custom_keyword!(false_ = "false");
 }
 
 /// Common annotations used to parse WebAssembly text files.
