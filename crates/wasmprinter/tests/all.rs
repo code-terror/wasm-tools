@@ -34,7 +34,11 @@ fn code_section_overflow() {
     )
     .unwrap();
     let err = wasmprinter::print_bytes(&bytes).unwrap_err();
-    assert!(err.to_string().contains("Unexpected EOF"), "{:?}", err);
+    assert!(
+        err.to_string().contains("unexpected end-of-file"),
+        "{:?}",
+        err
+    );
 }
 
 #[test]
@@ -115,16 +119,44 @@ fn no_panic_dangling_else() {
 }
 
 #[test]
-fn module_section_too_large() {
+fn dangling_if() {
+    let bytes = wat::parse_str(
+        r#"
+            (module
+                (func if)
+            )
+        "#,
+    )
+    .unwrap();
+    let wat = wasmprinter::print_bytes(&bytes).unwrap();
+    wat::parse_str(&wat).unwrap();
+}
+
+#[test]
+fn no_oom() {
+    // Whatever is printed here, it shouldn't take more than 500MB to print
+    // since it's only 20k functions.
+    let mut s = String::new();
+    s.push_str("(module\n");
+    for _ in 0..20_000 {
+        s.push_str("(func if)\n");
+    }
+    s.push(')');
+    let bytes = wat::parse_str(&s).unwrap();
+    let wat = wasmprinter::print_bytes(&bytes).unwrap();
+    assert!(wat.len() < 500_000_000);
+}
+
+#[test]
+fn dont_reserve_the_world() {
     let bytes = wat::parse_str(
         r#"
             (module binary
                 "\00asm" "\01\00\00\00"     ;; module header
 
-                "\0e"           ;; module section
-                "\08"           ;; size of section
-                "\00"           ;; 0 modules
-                ;; intentionally missing the rest of the section
+                "\03"               ;; function section
+                "\05"               ;; section size
+                "\ff\ff\ff\ff\0f"   ;; number of functions (u32::MAX)
             )
         "#,
     )
@@ -132,7 +164,7 @@ fn module_section_too_large() {
     let err = wasmprinter::print_bytes(&bytes).unwrap_err();
     assert!(
         err.to_string()
-            .contains("unexpected eof reading module section"),
+            .contains("functions which exceeds the limit"),
         "{:?}",
         err
     );

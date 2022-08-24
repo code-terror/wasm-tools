@@ -1,11 +1,9 @@
-(module
-  (import "" (module $m
-    (import "" (module))
-    (import "" (func))
-    (import "" (global i32))
-    (import "" (table 1 funcref))
-    (import "" (instance))
-    (import "" (memory 1))
+(component
+  (import "" (core module $m
+    (import "" "f" (func))
+    (import "" "g" (global i32))
+    (import "" "t" (table 1 funcref))
+    (import "" "m" (memory 1))
   ))
   (type $empty (instance))
 )

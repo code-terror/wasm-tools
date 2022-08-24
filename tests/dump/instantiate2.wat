@@ -1,4 +1,4 @@
-(module
- (import "" (module $m (import "" (func))))
- (instance (instantiate $m))
+(component
+ (import "" (component $c (import "" (func))))
+ (instance (instantiate $c))
 )

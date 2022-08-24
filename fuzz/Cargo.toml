@@ -1,27 +1,30 @@
 [package]
-name = "wasm-tools-libfuzzer"
+name = "wasm-tools-fuzz"
 version = "0.0.1"
 publish = false
-edition = "2018"
+edition = "2021"
 
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
-env_logger = "0.8"
-libfuzzer-sys = "0.3.2"
+anyhow = "1"
+arbitrary = "1"
+env_logger = "0.9"
+libfuzzer-sys = "0.4.0"
 log = "0.4"
 tempfile = "3.0"
+wasm-mutate = { path = "../crates/wasm-mutate" }
 wasm-smith = { path = "../crates/wasm-smith" }
 wasmparser = { path = "../crates/wasmparser" }
 wasmprinter = { path = "../crates/wasmprinter" }
+wasmtime = { version = "0.38.1", optional = true }
 wast = { path = "../crates/wast" }
 wat = { path = "../crates/wat" }
 
-[[bin]]
-name = "text-lexer"
-path = "fuzz_targets/text-lexer.rs"
+[lib]
 test = false
+doctest = false
 
 [[bin]]
 name = "text-parser"
@@ -55,19 +58,7 @@ test = false
 doc = false
 
 [[bin]]
-name = "validate-ensure-termination"
-path = "fuzz_targets/validate-ensure-termination.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "print-valid-module"
-path = "fuzz_targets/print-valid-module.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "roundtrip-valid-module"
-path = "fuzz_targets/roundtrip-valid-module.rs"
+name = "mutate"
+path = "fuzz_targets/mutate.rs"
 test = false
 doc = false
