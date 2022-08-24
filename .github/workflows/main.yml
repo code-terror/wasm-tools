@@ -1,5 +1,15 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any in-flight jobs for the same PR/branch so there's only one active
+# at a time
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -7,7 +17,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [stable, beta, nightly, macos, windows, mingw]
+        build: [stable, beta, nightly, macos, windows]
         include:
           - build: stable
             os: ubuntu-latest
@@ -24,70 +34,69 @@ jobs:
           - build: windows
             os: windows-latest
             rust: stable
-          - build: mingw
-            os: windows-latest
-            rust: stable-x86_64-gnu
     steps:
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v2
       with:
-        submodules: 'recursive'
+        submodules: true
     - name: Install Rust (rustup)
       run: rustup update ${{ matrix.rust }} --no-self-update && rustup default ${{ matrix.rust }}
-      if: matrix.os != 'macos-latest'
-    - name: Install Rust (macos)
-      run: |
-        curl https://sh.rustup.rs | sh -s -- -y
-        echo "##[add-path]$HOME/.cargo/bin"
-      if: matrix.os == 'macos-latest'
-
-    - name: Install Ninja (Linux)
-      run: sudo apt install ninja-build
-      if: matrix.os == 'ubuntu-latest'
-    - name: Install Ninja (macOS)
-      run: brew install ninja
-      if: matrix.os == 'macos-latest'
-    - name: Install Ninja (Windows)
-      run: choco install ninja
-      if: matrix.os == 'windows-latest'
-
-    - name: Build wat2wasm
-      run: |
-        set -e
-        cd tests/wabt
-        cmake . -G Ninja
-        ninja wast2json wat2wasm
       shell: bash
-    - name: Add wat2wasm to path (unix)
-      run: echo "##[add-path]`pwd`/tests/wabt"
-      if: matrix.os != 'windows-latest'
-    - name: Add wat2wasm to path (windows)
-      run: echo ::add-path::D:/a/wast/wast/tests/wabt
-      if: matrix.os == 'windows-latest'
-
-    - run: cargo test
-    - run: cargo test -p wast-parser
+    - run: cargo test --all
+    - run: cargo test --manifest-path crates/wasmparser/Cargo.toml --features deterministic
+    - run: cargo build --manifest-path crates/wast/Cargo.toml --no-default-features
+    - run: cargo build --manifest-path crates/wast/Cargo.toml --no-default-features --features wasm-module
+    - run: cmake -S ${{github.workspace}}/examples -B ${{github.workspace}}/examples/build -DCMAKE_BUILD_TYPE=Release
+    - run: cmake --build ${{github.workspace}}/examples/build --config Release
 
   rustfmt:
     name: Rustfmt
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v2
     - name: Install Rust
       run: rustup update stable && rustup default stable && rustup component add rustfmt
     - run: cargo fmt -- --check
 
+  compare-with-main:
+    name: wasmparser bench
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        submodules: true
+    - run: git fetch --recurse-submodules=no origin main && git branch main origin/main
+      if: github.ref != 'refs/heads/main'
+    - run: (cd crates/wasmparser && ./compare-with-main.sh)
+
   fuzz:
     name: Fuzz
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [parser, binary, lexer]
     steps:
-    - uses: actions/checkout@master
+    - uses: actions/checkout@v2
+      with:
+        submodules: true
     - name: Install Rust
       run: rustup update nightly && rustup default nightly
     - run: cargo install cargo-fuzz
-    - run: cargo fuzz run --release ${{ matrix.target }} -- -max_total_time=30 -jobs=2 -verbosity=0
-      env:
-        # See rust-fuzz/cargo-fuzz#161
-        RUSTFLAGS: -C codegen-units=1
+    - run: cargo fuzz build
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: cargo check --benches -p wasm-smith
+      - run: cargo check --no-default-features
+      - run: cargo check --no-default-features --features print
+      - run: cargo check --no-default-features --features parse
+      - run: cargo check --no-default-features --features validate
+      - run: cargo check --no-default-features --features smith
+      - run: cargo check --no-default-features --features shrink
+      - run: cargo check --no-default-features --features mutate
+      - run: cargo check --no-default-features --features dump
+      - run: cargo check --no-default-features --features objdump
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: cargo doc --all

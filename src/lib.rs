@@ -1,214 +1,113 @@
-//! A Rust parser for the [WebAssembly Text format][wat]
-//!
-//! This crate contains a stable interface to the parser for the [WAT][wat]
-//! format of WebAssembly text files. The format parsed by this crate follows
-//! the [online specification][wat].
-//!
-//! # Examples
-//!
-//! Parse an in-memory string:
-//!
-//! ```
-//! # fn foo() -> wast::Result<()> {
-//! let wat = r#"
-//!     (module
-//!         (func $foo)
-//!
-//!         (func (export "bar")
-//!             call $foo
-//!         )
-//!     )
-//! "#;
-//!
-//! let binary = wast::parse_str(wat)?;
-//! // ...
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Parse an on-disk file:
-//!
-//! ```
-//! # fn foo() -> wast::Result<()> {
-//! let binary = wast::parse_file("./foo.wat")?;
-//! // ...
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## Evolution of the WAT Format
-//!
-//! WebAssembly, and the WAT format, are an evolving specification. Features are
-//! added to WAT, WAT changes, and sometimes WAT breaks. The policy of this
-//! crate is that it will always follow the [official specification][wat] for
-//! WAT files.
-//!
-//! Future WebAssembly features will be accepted to this parser **and they will
-//! not require a feature gate to opt-in**. All implemented WebAssembly features
-//! will be enabled at all times. Using a future WebAssembly feature in the WAT
-//! format may cause breakage because while specifications are in development
-//! the WAT syntax (and/or binary encoding) will often change. This crate will
-//! do its best to keep up with these proposals, but breaking textual changes
-//! will be published as non-breaking semver changes to this crate.
-//!
-//! ## Stability
-//!
-//! This crate is intended to be a very stable shim over the `wast-parser` crate
-//! which is expected to be much more unstable. The `wast-parser` crate contains
-//! AST data structures for parsing `*.wat` files and they will evolve was the
-//! WAT and WebAssembly specifications evolve over time.
-//!
-//! This crate is currently at version 1.x.y, and it is intended that it will
-//! remain here for quite some time. Breaking changes to the WAT format will be
-//! landed as a non-semver-breaking version change in this crate. This crate
-//! will always follow the [official specification for WAT][wat].
-//!
-//! [wat]: http://webassembly.github.io/spec/core/text/index.html
+//! Shared input/output routines amongst most `wasm-tools` subcommands
 
-#![deny(missing_docs)]
+use anyhow::{bail, Context, Result};
+use std::fs::File;
+use std::io::{BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
 
-use std::fmt;
-use std::path::Path;
-use wast_parser::parser::{self, ParseBuffer};
+// This is intended to be included in a struct as:
+//
+//      #[clap(flatten)]
+//      io: wasm_tools::InputOutput,
+//
+// and then the methods are used to read the arguments,
+#[derive(clap::Parser)]
+pub struct InputOutput {
+    /// Input file to process.
+    ///
+    /// If not provided or if this is `-` then stdin is read entirely and
+    /// processed. Note that for most subcommands this input can either be a
+    /// binary `*.wasm` file or a textual format `*.wat` file.
+    input: Option<PathBuf>,
 
-/// Parses a file on disk as a [WebAssembly Text format][wat] file, returning
-/// the file translated to a WebAssembly binary file.
-///
-/// For more information see the [`parse_str`] documentation.
-///
-/// # Errors
-///
-/// For information about errors, see the [`parse_str`] documentation.
-///
-/// # Examples
-///
-/// ```
-/// # fn foo() -> wast::Result<()> {
-/// let binary = wast::parse_file("./foo.wat")?;
-/// // ...
-/// # Ok(())
-/// # }
-/// ```
-///
-/// [wat]: http://webassembly.github.io/spec/core/text/index.html
-pub fn parse_file(file: impl AsRef<Path>) -> Result<Vec<u8>> {
-    _parse_file(file.as_ref())
+    #[clap(flatten)]
+    output: OutputArg,
 }
 
-fn _parse_file(file: &Path) -> Result<Vec<u8>> {
-    let contents = std::fs::read_to_string(file).map_err(|err| Error {
-        kind: Box::new(ErrorKind::Io {
-            err,
-            msg: format!("failed to read `{}` to a string", file.display()),
-        }),
-    })?;
-    parse_str(&contents).map_err(|mut e| {
-        if let ErrorKind::Wast(e) = &mut *e.kind {
-            e.set_path(file);
+#[derive(clap::Parser)]
+pub struct OutputArg {
+    /// Where to place output.
+    ///
+    /// If not provided then stdout is used.
+    #[clap(short, long)]
+    output: Option<PathBuf>,
+}
+
+pub enum Output<'a> {
+    Wat(&'a str),
+    Wasm { bytes: &'a [u8], wat: bool },
+}
+
+impl InputOutput {
+    pub fn parse_input_wasm(&self) -> Result<Vec<u8>> {
+        if let Some(path) = &self.input {
+            if path != Path::new("-") {
+                let bytes = wat::parse_file(path)?;
+                return Ok(bytes);
+            }
         }
-        e
-    })
-}
+        let mut stdin = Vec::new();
+        std::io::stdin()
+            .read_to_end(&mut stdin)
+            .context("failed to read <stdin>")?;
+        let bytes = wat::parse_bytes(&stdin).map_err(|mut e| {
+            e.set_path("<stdin>");
+            e
+        })?;
+        Ok(bytes.into_owned())
+    }
 
-/// Parses an in-memory string as the [WebAssembly Text format][wat], returning
-/// the file as a binary WebAssembly file.
-///
-/// This function is intended to be a stable convenience function for parsing a
-/// wat file into a WebAssembly binary file. This is a high-level operation
-/// which does not expose any parsing internals, for that you'll want to use the
-/// `wast-parser` crate.
-///
-/// # Errors
-///
-/// This function can fail for a number of reasons, including (but not limited
-/// to):
-///
-/// * The `wat` input may fail to lex, such as having invalid tokens or syntax
-/// * The `wat` input may fail to parse, such as having incorrect syntactical
-///   structure
-/// * The `wat` input may contain names that could not be resolved
-///
-/// # Examples
-///
-/// ```
-/// # fn foo() -> wast::Result<()> {
-/// assert_eq!(wast::parse_str("(module)")?, b"\0asm\x01\0\0\0");
-/// assert!(wast::parse_str("module").is_err());
-///
-/// let wat = r#"
-///     (module
-///         (func $foo)
-///
-///         (func (export "bar")
-///             call $foo
-///         )
-///     )
-/// "#;
-///
-/// let binary = wast::parse_str(wat)?;
-/// // ...
-/// # Ok(())
-/// # }
-/// ```
-///
-/// [wat]: http://webassembly.github.io/spec/core/text/index.html
-pub fn parse_str(wat: impl AsRef<str>) -> Result<Vec<u8>> {
-    _parse_str(wat.as_ref())
-}
+    pub fn output(&self, bytes: Output<'_>) -> Result<()> {
+        self.output.output(bytes)
+    }
 
-fn _parse_str(wat: &str) -> Result<Vec<u8>> {
-    let buf = ParseBuffer::new(&wat).map_err(|e| Error::cvt(e, wat))?;
-    let mut ast = parser::parse::<wast_parser::Wat>(&buf).map_err(|e| Error::cvt(e, wat))?;
-    Ok(ast.module.encode().map_err(|e| Error::cvt(e, wat))?)
-}
-
-/// A convenience type definition for `Result` where the error is [`Error`]
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Errors from this crate related to parsing WAT files
-///
-/// An error can during example phases like:
-///
-/// * Lexing can fail if the document is syntactically invalid.
-/// * A string may not be utf-8
-/// * The syntactical structure of the wat file may be invalid
-/// * The wat file may be semantically invalid such as having name resolution
-///   failures
-#[derive(Debug)]
-pub struct Error {
-    kind: Box<ErrorKind>,
-}
-
-#[derive(Debug)]
-enum ErrorKind {
-    Wast(wast_parser::Error),
-    Io { err: std::io::Error, msg: String },
-}
-
-impl Error {
-    fn cvt<E: Into<wast_parser::Error>>(e: E, contents: &str) -> Error {
-        let mut err = e.into();
-        err.set_text(contents);
-        Error {
-            kind: Box::new(ErrorKind::Wast(err)),
-        }
+    pub fn output_writer(&self) -> Result<Box<dyn Write>> {
+        self.output.output_writer()
     }
 }
 
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &*self.kind {
-            ErrorKind::Wast(err) => err.fmt(f),
-            ErrorKind::Io { msg, .. } => msg.fmt(f),
+impl OutputArg {
+    pub fn output(&self, output: Output<'_>) -> Result<()> {
+        match output {
+            Output::Wat(s) => self.output_str(s),
+            Output::Wasm { bytes, wat: true } => {
+                self.output_str(&wasmprinter::print_bytes(&bytes)?)
+            }
+            Output::Wasm { bytes, wat: false } => {
+                match &self.output {
+                    Some(path) => {
+                        std::fs::write(path, bytes)
+                            .context(format!("failed to write `{}`", path.display()))?;
+                    }
+                    None => {
+                        if atty::is(atty::Stream::Stdout) {
+                            bail!("cannot print binary wasm output to a terminal, pass the `-t` flag to print the text format");
+                        }
+                        std::io::stdout()
+                            .write_all(bytes)
+                            .context("failed to write to stdout")?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
-}
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match &*self.kind {
-            ErrorKind::Wast(_) => None,
-            ErrorKind::Io { err, .. } => Some(err),
+    fn output_str(&self, output: &str) -> Result<()> {
+        match &self.output {
+            Some(path) => {
+                std::fs::write(path, output)
+                    .context(format!("failed to write `{}`", path.display()))?;
+            }
+            None => println!("{output}"),
+        }
+        Ok(())
+    }
+
+    pub fn output_writer(&self) -> Result<Box<dyn Write>> {
+        match &self.output {
+            Some(output) => Ok(Box::new(BufWriter::new(File::create(&output)?))),
+            None => Ok(Box::new(std::io::stdout())),
         }
     }
 }

@@ -1,5 +1,0 @@
-invalid character in string '\n'
-     --> tests/parse-fail/string1.wat:2:12
-      |
-    2 |   (import "
-      |            ^
