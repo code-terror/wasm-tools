@@ -1,21 +1,21 @@
 (assert_invalid
-  (module
-    (module $A
-      (import "" (memory 1)))
-    (module $B
+  (component
+    (core module $A
+      (import "" "" (memory 1)))
+    (core module $B
       (memory (export "") i64 1))
-    (instance $b (instantiate $B))
-    (instance $a (instantiate $A (import "" (memory $b ""))))
+    (core instance $b (instantiate $B))
+    (core instance $a (instantiate $A (with "" (instance $b))))
   )
   "memory type mismatch")
 
 (assert_invalid
-  (module
-    (module $A
-      (import "" (memory i64 1)))
-    (module $B
+  (component
+    (core module $A
+      (import "" "" (memory i64 1)))
+    (core module $B
       (memory (export "") 1))
-    (instance $b (instantiate $B))
-    (instance $a (instantiate $A (import "" (memory $b ""))))
+    (core instance $b (instantiate $B))
+    (core instance $a (instantiate $A (with "" (instance $b))))
   )
   "memory type mismatch")

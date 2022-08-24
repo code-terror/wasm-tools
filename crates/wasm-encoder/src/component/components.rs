@@ -1,4 +1,4 @@
-use crate::{encoders, Component, ComponentSection, ComponentSectionId};
+use crate::{Component, ComponentSection, ComponentSectionId, Encode};
 
 /// An encoder for the component section of WebAssembly components.
 ///
@@ -7,26 +7,23 @@ use crate::{encoders, Component, ComponentSection, ComponentSectionId};
 /// ```rust
 /// use wasm_encoder::{Component, NestedComponentSection};
 ///
+/// let mut nested = Component::new();
 /// let mut component = Component::new();
-/// component.section(&NestedComponentSection(Component::new()));
+/// component.section(&NestedComponentSection(&nested));
 ///
 /// let bytes = component.finish();
 /// ```
-#[derive(Clone, Debug, Default)]
-pub struct NestedComponentSection(pub Component);
+#[derive(Clone, Debug)]
+pub struct NestedComponentSection<'a>(pub &'a Component);
 
-impl ComponentSection for NestedComponentSection {
+impl Encode for NestedComponentSection<'_> {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.0.bytes.encode(sink);
+    }
+}
+
+impl ComponentSection for NestedComponentSection<'_> {
     fn id(&self) -> u8 {
         ComponentSectionId::Component.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        sink.extend(
-            encoders::u32(u32::try_from(self.0.bytes.len()).unwrap())
-                .chain(self.0.bytes.iter().copied()),
-        );
     }
 }

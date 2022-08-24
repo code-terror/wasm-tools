@@ -1,6 +1,6 @@
-use crate::{encoders, Section, SectionId};
+use crate::{encode_section, Encode, Section, SectionId};
 
-/// The type of a value.
+/// The type of a core WebAssembly value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[repr(u8)]
 pub enum ValType {
@@ -34,21 +34,10 @@ impl From<ValType> for u8 {
     }
 }
 
-pub(crate) fn encode_functype<P, R>(bytes: &mut Vec<u8>, params: P, results: R)
-where
-    P: IntoIterator<Item = ValType>,
-    P::IntoIter: ExactSizeIterator,
-    R: IntoIterator<Item = ValType>,
-    R::IntoIter: ExactSizeIterator,
-{
-    let params = params.into_iter();
-    let results = results.into_iter();
-
-    bytes.push(0x60);
-    bytes.extend(encoders::u32(u32::try_from(params.len()).unwrap()));
-    bytes.extend(params.map(u8::from));
-    bytes.extend(encoders::u32(u32::try_from(results.len()).unwrap()));
-    bytes.extend(results.map(u8::from));
+impl Encode for ValType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(*self as u8);
+    }
 }
 
 /// An encoder for the type section of WebAssembly modules.
@@ -97,27 +86,27 @@ impl TypeSection {
         R: IntoIterator<Item = ValType>,
         R::IntoIter: ExactSizeIterator,
     {
-        encode_functype(&mut self.bytes, params, results);
+        let params = params.into_iter();
+        let results = results.into_iter();
+
+        self.bytes.push(0x60);
+        params.len().encode(&mut self.bytes);
+        self.bytes.extend(params.map(u8::from));
+        results.len().encode(&mut self.bytes);
+        self.bytes.extend(results.map(u8::from));
         self.num_added += 1;
         self
+    }
+}
+
+impl Encode for TypeSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
     }
 }
 
 impl Section for TypeSection {
     fn id(&self) -> u8 {
         SectionId::Type.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
     }
 }

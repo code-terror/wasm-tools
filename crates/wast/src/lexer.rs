@@ -24,7 +24,8 @@
 //!
 //! [`Lexer`]: crate::lexer::Lexer
 
-use crate::{Error, Span};
+use crate::token::Span;
+use crate::Error;
 use std::borrow::Cow;
 use std::char;
 use std::fmt;
@@ -32,7 +33,7 @@ use std::str;
 
 /// A structure used to lex the s-expression syntax of WAT files.
 ///
-/// This structure is used to generate [`Source`] items, which should account for
+/// This structure is used to generate [`Token`] items, which should account for
 /// every single byte of the input as we iterate over it. A [`LexError`] is
 /// returned for any non-lexable text.
 #[derive(Clone)]
@@ -94,6 +95,7 @@ pub enum Token<'a> {
 /// All lexing errors have line/colum/position information as well as a
 /// `LexError` indicating what kind of error happened while lexing.
 #[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
 pub enum LexError {
     /// A dangling block comment was found with an unbalanced `(;` which was
     /// never terminated in the file.
@@ -146,9 +148,6 @@ pub enum LexError {
     /// version to behave differently than the compiler-visible version, so
     /// these are simply rejected for now.
     ConfusingUnicode(char),
-
-    #[doc(hidden)]
-    __Nonexhaustive,
 }
 
 /// A sign token for an integer.
@@ -745,8 +744,7 @@ impl<'a> Lexer<'a> {
                         'u' => {
                             Lexer::must_eat_char(it, '{')?;
                             let n = Lexer::hexnum(it)?;
-                            let c = char::from_u32(n)
-                                .ok_or_else(|| LexError::InvalidUnicodeValue(n))?;
+                            let c = char::from_u32(n).ok_or(LexError::InvalidUnicodeValue(n))?;
                             buf.extend(c.encode_utf8(&mut [0; 4]).as_bytes());
                             Lexer::must_eat_char(it, '}')?;
                         }
@@ -943,7 +941,6 @@ impl fmt::Display for LexError {
             InvalidUnicodeValue(c) => write!(f, "invalid unicode scalar value 0x{:x}", c)?,
             LoneUnderscore => write!(f, "bare underscore in numeric literal")?,
             ConfusingUnicode(c) => write!(f, "likely-confusing unicode character found {:?}", c)?,
-            __Nonexhaustive => unreachable!(),
         }
         Ok(())
     }

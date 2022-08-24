@@ -1,6 +1,5 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use rayon::prelude::*;
-use std::path::PathBuf;
 use std::time::Instant;
 use wasmparser::{Parser, ValidPayload, Validator, WasmFeatures};
 
@@ -33,11 +32,8 @@ pub struct Opts {
     #[clap(long, short = 'f', parse(try_from_str = parse_features))]
     features: Option<WasmFeatures>,
 
-    /// Input WebAssembly file to validate.
-    ///
-    /// This can either be a WebAssembly binary (*.wasm) or a WebAssembly text
-    /// file (*.wat) which will be translated to binary before validation.
-    input: PathBuf,
+    #[clap(flatten)]
+    io: wasm_tools::InputOutput,
 }
 
 impl Opts {
@@ -54,7 +50,7 @@ impl Opts {
         // validated later.
         let mut validator = Validator::new_with_features(self.features.unwrap_or_default());
         let mut functions_to_validate = Vec::new();
-        let wasm = wat::parse_file(&self.input)?;
+        let wasm = self.io.parse_input_wasm()?;
 
         let start = Instant::now();
         for payload in Parser::new(0).parse_all(&wasm) {
@@ -73,7 +69,11 @@ impl Opts {
         let start = Instant::now();
         functions_to_validate
             .into_par_iter()
-            .try_for_each(|(mut validator, body)| validator.validate(&body))?;
+            .try_for_each(|(mut validator, body)| {
+                validator
+                    .validate(&body)
+                    .with_context(|| format!("func {} failed to validate", validator.index()))
+            })?;
         log::info!("functions validated in {:?}", start.elapsed());
         Ok(())
     }

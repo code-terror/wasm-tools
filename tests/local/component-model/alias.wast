@@ -1,671 +1,197 @@
-(module
+(component
   (import "i" (instance $i
     (export "f1" (func $f1))
-    (export "f2" (func $f2 (param i32)))
+    (export "f2" (func $f2 (param string)))
   ))
-  (func (export "run")
-    call (func $i "f1")
-  )
+  (export "run" (func $i "f1"))
 )
-(assert_malformed
-  (module quote
-  "  (type $t (instance"
-  "    (export \"f1\" (func $f1))"
-  "  ))"
-  "  (import \"i\" (instance $i (type $t)))"
-  "  (func (export \"run\")"
-  "    call $i.$f1"
-  "  )"
-  )
-  "failed to find func named `$i.$f1`")
 
-(module
-  (import "i" (module $m
+(component
+  (import "i" (component $c
+    (export "f1" (func $f1))
+    (export "f2" (func $f2 (param string)))
+  ))
+  (instance $i (instantiate $c))
+  (export "run" (func $i "f1"))
+)
+
+(component
+  (import "i" (core module $m
     (export "f1" (func $f1))
     (export "f2" (func $f2 (param i32)))
   ))
-  (instance $i (instantiate $m))
-  (func (export "run")
-    call (func $i "f1")
-  )
-)
-(assert_malformed
-  (module quote
-    "(type $t (module "
-    "  (export \"f1\" (func $f1))"
-    "))"
-    "(import \"i\" (module $m (type $t)))"
-    "(instance $i (instantiate $m))"
-    "(func (export \"run\")"
-    "  call $i.$f1"
-    ")"
-  )
-  "failed to find func named `$i.$f1`")
+  (core instance $i (instantiate $m))
 
-(module
-  (module $m
-    (func $f1 (export "f1"))
-    (func $f2 (export "f2") (param i32))
-  )
-  (instance $i (instantiate $m))
-  (func (export "run")
-    call (func $i "f1")
-  )
+  (core module $m2 (import "" "" (func)))
+
+  (core instance (instantiate $m2 (with "" (instance (export "" (func $i "f1"))))))
 )
 
-
-(module
-  (import "libc" (instance $libc
-    (export "memory" (memory $mem 1))
-    (export "table" (table $tbl 0 funcref))
+(component
+  (import "" (core module $libc
+    (export "memory" (memory 1))
+    (export "table" (table 0 funcref))
+    (export "func" (func))
+    (export "global" (global i32))
+    (export "global mut" (global (mut i64)))
   ))
-  (alias $libc "memory" (memory $mem))
-  (alias $libc "table" (table $tbl))
-)
+  (core instance $libc (instantiate $libc))
+  (core alias export $libc "memory" (memory $mem))
+  (core alias export $libc "table" (table $tbl))
+  (core alias export $libc "func" (func $func))
+  (core alias export $libc "global" (global $global))
+  (core alias export $libc "global mut" (global $global_mut))
 
-(module
-  (import "libc" (instance $libc
-    (export "memory" (memory $mem 1))
-    (export "table" (table $tbl 0 funcref))
-    (export "global" (global $glbl i32))
+  (import "x" (core module $needs_libc
+    (import "" "memory" (memory 1))
+    (import "" "table" (table 0 funcref))
+    (import "" "func" (func))
+    (import "" "global" (global i32))
+    (import "" "global mut" (global (mut i64)))
   ))
 
-  (func $table_get
-    i32.const 0
-    table.get (table $libc "table")
-    drop)
-
-  (func $global_get
-    global.get (global $libc "global")
-    drop)
+  (core instance (instantiate $needs_libc (with "" (instance
+    (export "memory" (memory $mem))
+    (export "table" (table $tbl))
+    (export "func" (func $func))
+    (export "global" (global $global))
+    (export "global mut" (global $global_mut))
+  ))))
 )
 
-;; auto-expansion should visit everywhere
-(module
+(component
   (import "" (instance $i
-    (export "" (global $global i32))
-  ))
-
-  (func
-    global.get (global $i "")
-    drop)
-)
-(module
-  (import "" (instance $i
-    (export "" (global $global (mut i32)))
-  ))
-
-  (func
-    i32.const 0
-    global.set (global $i ""))
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    i32.const 0
-    table.get (table $i "")
-    drop)
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    i32.const 0
-    ref.null func
-    table.set (table $i ""))
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    i32.const 0
-    call_indirect (table $i ""))
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    table.size (table $i "")
-    drop)
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    ref.null func
-    i32.const 0
-    table.grow (table $i "")
-    drop)
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    i32.const 0
-    ref.null func
-    i32.const 0
-    table.fill (table $i ""))
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    i32.const 0
-    i32.const 0
-    i32.const 0
-    table.init (table $i "") 0)
-  (elem func 0)
-)
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-
-  (func
-    i32.const 0
-    i32.const 0
-    i32.const 0
-    table.copy (table $i "") (table $i ""))
-)
-
-(module
-  (import "" (instance $i
-    (export "" (func $func))
-  ))
-  (func
-    return_call (func $i ""))
-)
-
-(module
-  (import "" (instance $i
-    (export "" (table $table 1 funcref))
-  ))
-  (func
-    i32.const 0
-    return_call_indirect (table $i ""))
-)
-
-(module
-  (import "" (instance $i
-    (export "" (func $func))
-  ))
-  (global funcref (ref.func (func $i "")))
-)
-(module
-  (import "" (instance $i
-    (export "" (func $func))
-  ))
-  (start (func $i ""))
-)
-(module
-  (import "" (instance $i
-    (export "a" (table $table 1 funcref))
-    (export "b" (func $func))
-  ))
-  (elem (table $i "a") (i32.const 0) funcref (ref.func (func $i "b")))
-)
-(module
-  (import "" (instance $i
-    (export "a" (table $table 1 funcref))
-    (export "b" (func $func))
-  ))
-  (elem (table $i "a") (i32.const 0) func (func $i "b"))
-)
-(module
-  (import "" (instance $i
-    (export "" (memory $memory 1))
-  ))
-  (data (memory $i "") (i32.const 0) "")
-)
-
-(module
-  (import "" (instance $i
-    (export "1" (func $func))
-    (export "2" (memory $memory 1))
-    (export "3" (table $table 1 funcref))
-    (export "4" (global $global i32))
-    (export "5" (module $module))
-    (export "6" (instance $instance))
+    (export "1" (func))
+    (export "2" (core module))
+    (export "3" (instance))
   ))
   (export "1" (func $i "1"))
-  (export "2" (memory $i "2"))
-  (export "3" (table $i "3"))
-  (export "4" (global $i "4"))
-  (export "5" (module $i "5"))
-  (export "6" (instance $i "6"))
+  (export "2" (core module $i "2"))
+  (export "3" (instance $i "3"))
 )
 
-(module
-  (import "" (instance $i
-    (export "1" (func $func))
-    (export "2" (memory $memory 1))
-    (export "3" (table $table 1 funcref))
-    (export "4" (global $global i32))
-    (export "5" (module $module))
-    (export "6" (instance $instance))
+(component
+  (import "" (core module $libc
+    (export "memory" (memory 1))
+    (export "table" (table 0 funcref))
+    (export "func" (func))
+    (export "global" (global i32))
+    (export "global mut" (global (mut i64)))
   ))
 
-  (module $m
-    (import "1" (func))
-    (import "2" (memory 1))
-    (import "3" (global i32))
-    (import "4" (table 1 funcref))
-    (import "5" (module))
-    (import "6" (instance))
-  )
-
-  (instance (instantiate $m
-    (import "1" (func $i "1"))
-    (import "2" (memory $i "2"))
-    (import "3" (global $i "4"))
-    (import "4" (table $i "3"))
-    (import "5" (module $i "5"))
-    (import "6" (instance $i "6"))
+  (import "x" (core module $needs_libc
+    (import "" "memory" (memory 1))
+    (import "" "table" (table 0 funcref))
+    (import "" "func" (func))
+    (import "" "global" (global i32))
+    (import "" "global mut" (global (mut i64)))
   ))
+
+  (core instance $libc (instantiate $libc))
+  (core instance (instantiate $needs_libc (with "" (instance
+    (export "memory" (memory $libc "memory"))
+    (export "table" (table $libc "table"))
+    (export "func" (func $libc "func"))
+    (export "global" (global $libc "global"))
+    (export "global mut" (global $libc "global mut"))
+  ))))
 )
 
-(module
-  (module $m
-    (func $f (export ""))
+(assert_invalid
+  (component
+    (import "" (instance (export "" (func))))
+    (export "" (core module 0 ""))
   )
-
-  (instance $i (instantiate $m))
-
-  (func
-    call (func $i ""))
-)
+  "export `` for instance 0 is not a module")
 
 (assert_invalid
-  (module
-    (import "" (instance $i (export "a" (func))))
-
-    (import "a" (module $m
-      (import "" (module (export "a" (func))))
-    ))
-
-    (module $local
-      (alias outer 0 $i (instance))
+  (component
+    (component
+      (component (export ""))
     )
-
-    (instance (instantiate $m (import "" (module $local))))
+    (instance (instantiate 0))
+    (export "" (core module 0 ""))
   )
-  "invalid external kind in alias")
-
-(assert_malformed
-  (module quote
-    "(func)"
-    "(module"
-    "  (export \"\" (func $f))"
-    ")"
-    "(func $f)"
-  )
-  "failed to find func named `$f`")
-
-(assert_malformed
-  (module
-    (func)
-    (module
-      (import "" (instance))
-      (alias 0 "" (func))
-      (export "" (func 0))
-    )
-  )
-  "aliased name `` does not exist")
+  "export `` for instance 0 is not a module")
 
 (assert_invalid
-  (module
-    (func)
-    (module
-      (import "" (instance (export "" (global i32))))
-      (alias 0 "" (func))
-      (export "" (func 0))
-    )
+  (component
+    (import "" (core module))
+    (core instance (instantiate 0))
+    (core alias export 0 "" (func))
   )
-  "alias kind mismatch")
+  "core instance 0 has no export named ``")
 
 (assert_invalid
-  (module
-    (func)
-    (module
-      (import "" (module))
-      (instance (instantiate 0))
-      (alias 0 "" (func))
-      (export "" (func 0))
-    )
+  (component
+    (core module)
+    (core instance (instantiate 0))
+    (core alias export 0 "" (func))
   )
-  "aliased name `` does not exist")
+  "core instance 0 has no export named ``")
 
 (assert_invalid
-  (module
-    (func)
-    (module
-      (import "" (module (export "" (global i32))))
-      (instance (instantiate 0))
-      (alias 0 "" (func))
-      (export "" (func 0))
-    )
+  (component
+    (import "" (component))
+    (instance (instantiate 0))
+    (alias export 0 "" (func))
   )
-  "alias kind mismatch with export kind")
+  "instance 0 has no export named ``")
 
 (assert_invalid
-  (module
-    (func)
-    (module
-      (module)
-      (instance (instantiate 0))
-      (alias 0 "" (func))
-      (export "" (func 0))
-    )
-  )
-  "aliased name `` does not exist in instance")
+  (component
+    (import "a" (core module $a (export "" (func))))
+    (import "b" (core module $b (import "" "" (func (param i32)))))
 
-(assert_invalid
-  (module
-    (func)
-    (module
-      (module (global (export "") i32 (i32.const 0)))
-      (instance (instantiate 0))
-      (alias 0 "" (func))
-      (export "" (func 0))
-    )
-  )
-  "alias kind mismatch with export kind")
-
-(assert_malformed
-  (module quote
-    "(func)"
-    "(module"
-    "  (type (func))"
-    "  (import \"\" (instance (type 0)))"
-    "  (alias 0 \"\" (func))"
-    "  (export \"\" (func 0))"
-    ")"
-  )
-  "type index is not an instance")
-
-(assert_malformed
-  (module quote
-    "(func)"
-    "(module"
-    "  (instance (instantiate 100))"
-    "  (alias 0 \"\" (func))"
-    "  (export \"\" (func 0))"
-    ")"
-  )
-  "unknown module")
-
-(assert_invalid
-  (module
-    (import "" (instance $i))
-    (alias $i "foo" (func))
-  )
-  "aliased name `foo` does not exist in instance")
-
-(assert_invalid
-  (module
-    (import "" (instance $i
-      (export "" (memory 1))
-    ))
-    (alias $i "" (func))
-  )
-  "alias kind mismatch with export kind")
-
-(assert_invalid
-  (module
-    (import "" (instance $i
-      (export "" (func))
-    ))
-    (alias $i "" (func))
-
-    (func
-      i32.const 0
-      call 0)
+    (core instance $a (instantiate $a))
+    (core instance $b (instantiate $b (with "" (instance $a))))
   )
   "type mismatch")
 
 ;; aliasing various items works
-(module
-  (import "" (instance $i
-    (export "" (global $g (mut i32)))
-  ))
-  (alias $i "" (global $g))
 
-  (func
-    global.get $g
-    global.set $g)
-)
-
-(module
-  (import "" (instance $i
-    (export "" (table $t 1 funcref))
-  ))
-  (alias $i "" (table $t))
-
-  (func
-    i32.const 0
-    table.get $t
-    drop)
-)
-
-(module
-  (import "" (instance $i
-    (export "" (memory $m 1))
-  ))
-  (alias $i "" (memory $m))
-
-  (func
-    i32.const 0
-    i32.load
-    drop)
-)
-
-(module
-  (import "" (instance $i
-    (export "" (func $f))
-  ))
-  (alias $i "" (func $f))
-
-  (func
-    call $f)
-)
-
-(module
-  (import "" (instance $i
-    (export "" (instance $i2
-      (export "" (func))
-    ))
-  ))
-  (alias $i "" (instance $i2))
-  (alias $i2 "" (func $f))
-
-  (func
-    call $f)
-)
-
-(module
-  (import "" (instance $i
-    (export "" (module $m))
-  ))
-  (alias $i "" (module $m))
-  (instance (instantiate $m))
-)
-
-(assert_malformed
-  (module quote
-    "(alias 0 \"\" (module))"
+(component $PARENT
+  (type $t (func (result string)))
+  (component
+    (import "" (func (type $t)))
   )
-  "instance index out of bounds")
-
-(assert_invalid
-  (module binary
-    "\00asm" "\01\00\00\00"
-    "\10\05"        ;; alias section
-    "\01"           ;; 1 alias
-    "\00\00\00\00"  ;; (alias (instance 0) (func 0))
+  (component
+    (alias outer $PARENT $t (type $my_type))
+    (alias outer 0 $my_type (type $my_type_again))
+    (import "" (func (type $my_type_again)))
   )
-  "unknown instance")
-
-(module
-  (import "" (module $m
-    (export "" (func $f))
-  ))
-  (instance $i (instantiate $m))
-  (alias $i "" (func $f))
-
-  (func
-    call $f)
 )
 
-(module
-  (module $m
-    (func $f (export ""))
-  )
-  (instance $i (instantiate $m))
-  (alias $i "" (func $f))
+(component
+  (type $a (func (result string)))
+  (component
+    (type $b (func (result u32)))
+    (component
+      (type $c (func (result s32)))
 
-  (func
-    call $f)
-)
+      (component
+        (import "a" (func $a (type $a)))
+        (import "b" (func $b (type $b)))
+        (import "c" (func $c (type $c)))
 
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable i32.load (memory $i "x") unreachable)
-)
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable memory.init (memory $i "x") $data)
-  (data $data "x")
-)
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable memory.copy (memory $i "x") (memory $i "x"))
-)
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable memory.fill (memory $i "x"))
-)
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable memory.size (memory $i "x") unreachable)
-)
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable memory.grow (memory $i "x") unreachable)
-)
-(module
-  (module $m (memory $m (export "x") 1))
-  (instance $i (instantiate $m))
-  (func unreachable f64.load (memory $i "x") unreachable)
-)
+        (import "" (component $C
+          (import "a" (func (result string)))
+          (import "b" (func (result u32)))
+          (import "c" (func (result s32)))
+        ))
 
-(module
-  (module $m
-    (module $m
-      (func (export "")))
-    (instance $a (export "") (instantiate $m))
-  )
-  (instance $i (instantiate $m))
-  (alias (instance $i "") "" (func))
-)
-
-(assert_invalid
-  (module
-    (module
-      (alias outer 0 0 (module))
-    )
-  )
-  "alias to module not defined in parent")
-(assert_malformed
-  (module quote
-  "  (type (func))"
-  "  (module"
-  "    (alias outer 1 $x (module))"
-  "  )"
-  )
-  "module index too large")
-(assert_invalid
-  (module
-    (module
-      (alias outer 1 0 (module))
-    )
-  )
-  "relative depth too large")
-(assert_invalid
-  (module
-    (type (module))
-    (module
-      (alias outer 0 $f (type))
-    )
-    (type $f (func))
-  )
-  "alias to type not defined in parent")
-
-(module $PARENT
-  (type $t (func (result i32)))
-  (module
-    (func (type outer $PARENT $t)
-      i32.const 0))
-)
-
-(module $a
-  (type $t (func (result i32)))
-  (module $b
-    (type $t (func (result i64)))
-    (module $c
-      (type $t (func (result f32)))
-
-      (module
-        (func (type outer $a $t)
-          i32.const 0)
-        (func (type outer $b $t)
-          i64.const 0)
-        (func (type outer $c $t)
-          f32.const 0)
+        (instance (instantiate $C
+          (with "a" (func $a))
+          (with "b" (func $b))
+          (with "c" (func $c))
+        ))
       )
     )
   )
 )
 
-(module $a
-  (type $t (func (result i32)))
-  (module $a
-    (type $t (func (result i64)))
-    (module
-      (func (type outer $a $t)
-        i64.const 0)
-    )
-    (func (type outer $a $t)
-      i32.const 0)
-  )
-  (module
-    (func (type outer $a $t)
-      i32.const 0)
-  )
-)
-
 ;; multiple projections in alias sugar
-(module $a
+(component $a
   (import "" (instance $a
     (export "b" (instance
       (export "c" (instance
@@ -675,51 +201,89 @@
       ))
     ))
   ))
-  (func
-    call (func $a "b" "c" "d" "f"))
-)
 
-(module
-  (import "b" "i" (instance $i
-    ;; notice that this order is swapped
-    (export "g" (func (param i32) (result i32)))
-    (export "f" (func (result i32)))
+  (import "b" (component $b (import "" (func))))
+
+  (instance (instantiate $b
+    (with "" (func $a "b" "c" "d" "f"))
   ))
-
-  (func (export "f") (result i32)
-    call (func $i "f"))
-  (func (export "g") (param i32) (result i32)
-    local.get 0
-    call (func $i "g"))
 )
 
-(module $PARENT
-  (type $empty (func))
-  (module
-    (tag $x)
+;; alias some constructs
+(component
+  (import "" (instance $foo (export "v" (value s32))))
+  (export "v" (value $foo "v"))
+)
 
-    (func
-      i32.const 0
-      if (type outer $PARENT $empty)
-      end
-      loop (type outer $PARENT $empty)
-      end
-      block (type outer $PARENT $empty)
-      end
+(component
+  (import "" (instance $foo (export "v" (component))))
+  (export "v" (component $foo "v"))
+)
 
-      try (type outer $PARENT $empty)
-      catch $x
-      end
+(component
+  (import "" (instance $foo (export "v" (core module))))
+  (export "v" (core module $foo "v"))
+)
+
+(component $C
+  (core type $t (func))
+  (component $C2
+    (core alias outer $C $t (type $t2))
+    (component
+      (core alias outer $C $t (type))
+      (core alias outer $C2 $t2 (type))
     )
   )
 )
 
-(assert_invalid
-  (module
-    (elem (f32.load (memory 2 ""))))
-  "unknown instance")
+(component $C
+  (core module $m)
+  (alias outer $C $m (core module $target))
+  (export "v" (core module $target))
+)
+
+(component $C
+  (component $m)
+  (alias outer $C $m (component $target))
+  (export "v" (component $target))
+)
 
 (assert_invalid
-  (module
-    (data (i32.load (memory 2 ""))))
-  "unknown instance")
+  (component (core alias outer 100 0 (type)))
+  "invalid outer alias count of 100")
+
+(assert_invalid
+  (component (core alias outer 0 0 (type)))
+  "index out of bounds")
+
+(assert_invalid
+  (component (alias outer 100 0 (core module)))
+  "invalid outer alias count of 100")
+
+(assert_invalid
+  (component (alias outer 0 0 (core module)))
+  "index out of bounds")
+
+(assert_invalid
+  (component (alias outer 100 0 (component)))
+  "invalid outer alias count of 100")
+
+(assert_invalid
+  (component (alias outer 0 0 (component)))
+  "index out of bounds")
+
+(component
+  (import "" (instance $i
+     (export "x" (core module))
+  ))
+  ;; inline alias injection sugar works for module references
+  (core instance (instantiate (module $i "x")))
+)
+
+(component
+  (import "" (instance $i
+     (export "x" (component))
+  ))
+  ;; inline alias injection sugar works for component references
+  (instance (instantiate (component $i "x")))
+)

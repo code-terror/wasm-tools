@@ -1,4 +1,4 @@
-use crate::{encoders, ComponentSection, ComponentSectionId};
+use crate::{ComponentSection, ComponentSectionId, Encode};
 
 /// An encoder for the start section of WebAssembly components.
 ///
@@ -24,29 +24,23 @@ pub struct ComponentStartSection<A> {
     pub args: A,
 }
 
+impl<A> Encode for ComponentStartSection<A>
+where
+    A: AsRef<[u32]>,
+{
+    fn encode(&self, sink: &mut Vec<u8>) {
+        let mut bytes = Vec::new();
+        self.function_index.encode(&mut bytes);
+        self.args.as_ref().encode(&mut bytes);
+        bytes.encode(sink);
+    }
+}
+
 impl<A> ComponentSection for ComponentStartSection<A>
 where
     A: AsRef<[u32]>,
 {
     fn id(&self) -> u8 {
         ComponentSectionId::Start.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let args = self.args.as_ref();
-
-        let mut bytes = Vec::new();
-        bytes.extend(encoders::u32(self.function_index));
-
-        bytes.extend(encoders::u32(u32::try_from(args.len()).unwrap()));
-        for arg in args {
-            bytes.extend(encoders::u32(*arg));
-        }
-
-        let n = bytes.len();
-        sink.extend(encoders::u32(n as u32).chain(bytes));
     }
 }

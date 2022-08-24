@@ -2,8 +2,7 @@ use anyhow::{Context, Result};
 use arbitrary::Arbitrary;
 use clap::Parser;
 use std::borrow::Cow;
-use std::fs;
-use std::io::{stdin, stdout, Read, Write};
+use std::io::{stdin, Read};
 use std::path::PathBuf;
 use std::process;
 use wasm_smith::{InstructionKind, InstructionKinds, MaybeInvalidModule, Module};
@@ -42,12 +41,12 @@ pub struct Opts {
     #[clap(parse(from_os_str))]
     input: Option<PathBuf>,
 
-    /// The output file path, where the generated WebAssembly module is
-    /// placed.
-    ///
-    /// `stdout` is used if this argument is not supplied.
-    #[clap(short = 'o', long = "output", parse(from_os_str))]
-    output: Option<PathBuf>,
+    #[clap(flatten)]
+    output: wasm_tools::OutputArg,
+
+    /// Output the text format of WebAssembly instead of the binary format.
+    #[clap(short = 't', long)]
+    wat: bool,
 
     /// Ensure that execution of generated Wasm modules will always terminate.
     ///
@@ -55,7 +54,7 @@ pub struct Opts {
     /// and in function prologues. When the fuel reaches 0, a trap is raised to
     /// terminate execution. Control the default amount of fuel with the
     /// `--fuel` flag.
-    #[clap(short = 't', long = "ensure-termination")]
+    #[clap(long = "ensure-termination")]
     ensure_termination: bool,
 
     /// Indicates that the generated module may contain invalid wasm functions,
@@ -105,6 +104,8 @@ struct Config {
     min_exports: Option<usize>,
     #[clap(long = "max-exports")]
     max_exports: Option<usize>,
+    #[clap(long = "export-everything")]
+    export_everything: Option<bool>,
     #[clap(long = "min-element-segments")]
     min_element_segments: Option<usize>,
     #[clap(long = "max-element-segments")]
@@ -127,6 +128,10 @@ struct Config {
     max_memory_pages: Option<u64>,
     #[clap(long = "memory-max-size-required")]
     memory_max_size_required: Option<bool>,
+    #[clap(long = "max-table-elements")]
+    max_table_elements: Option<u32>,
+    #[clap(long = "table-max-size-required")]
+    table_max_size_required: Option<bool>,
     #[clap(long = "max-instances")]
     max_instances: Option<usize>,
     #[clap(long = "max-modules")]
@@ -179,44 +184,25 @@ struct Config {
     /// `--allowed-instructions numeric,control,parametric`
     #[clap(long = "allowed-instructions", use_value_delimiter = true)]
     allowed_instructions: Option<Vec<InstructionKind>>,
+    #[clap(long = "threads")]
+    #[serde(rename = "threads")]
+    threads_enabled: Option<bool>,
 }
 
 impl Opts {
     pub fn run(&self) -> Result<()> {
-        let stdin = stdin();
-        let (mut input, input_name): (Box<dyn Read>, _) = match &self.input {
+        let seed = match &self.input {
             Some(f) => {
-                let input = Box::new(
-                    fs::File::open(f)
-                        .with_context(|| format!("failed to open '{}'", f.display()))?,
-                );
-                (input, f.display().to_string())
+                std::fs::read(f).with_context(|| format!("failed to read '{}'", f.display()))?
             }
             None => {
-                let input = Box::new(stdin.lock());
-                (input, "<stdin>".to_string())
+                let mut seed = Vec::new();
+                stdin()
+                    .read_to_end(&mut seed)
+                    .context("failed to read <stdin>")?;
+                seed
             }
         };
-
-        let stdout = stdout();
-        let (mut output, output_name): (Box<dyn Write>, _) = match &self.output {
-            Some(f) => {
-                let output = Box::new(
-                    fs::File::create(f)
-                        .with_context(|| format!("failed to create '{}'", f.display()))?,
-                );
-                (output, f.display().to_string())
-            }
-            None => {
-                let output = Box::new(stdout.lock());
-                (output, "<stdout>".to_string())
-            }
-        };
-
-        let mut seed = vec![];
-        input
-            .read_to_end(&mut seed)
-            .with_context(|| format!("failed to read '{}'", input_name))?;
 
         let mut u = arbitrary::Unstructured::new(&seed);
         let wasm_bytes = if self.maybe_invalid {
@@ -252,11 +238,10 @@ impl Opts {
             module.to_bytes()
         };
 
-        output
-            .write_all(&wasm_bytes)
-            .with_context(|| format!("failed to write to '{}'", output_name))?;
-
-        drop(output);
+        self.output.output(wasm_tools::Output::Wasm {
+            bytes: &wasm_bytes,
+            wat: self.wat,
+        })?;
         Ok(())
     }
 }
@@ -291,6 +276,7 @@ impl wasm_smith::Config for CliAndJsonConfig {
         (max_globals, usize, 100),
         (min_exports, usize, 0),
         (max_exports, usize, 100),
+        (export_everything, bool, false),
         (min_element_segments, usize, 0),
         (max_element_segments, usize, 100),
         (min_data_segments, usize, 0),
@@ -301,12 +287,14 @@ impl wasm_smith::Config for CliAndJsonConfig {
         (min_tables, u32, 0),
         (max_tables, usize, 1),
         (memory_max_size_required, bool, false),
+        (max_table_elements, u32, 1_000_000),
+        (table_max_size_required, bool, false),
         (max_instances, usize, 10),
         (max_modules, usize, 10),
         (min_uleb_size, u8, 1),
-        (bulk_memory_enabled, bool, false),
-        (reference_types_enabled, bool, false),
-        (simd_enabled, bool, false),
+        (bulk_memory_enabled, bool, true),
+        (reference_types_enabled, bool, true),
+        (simd_enabled, bool, true),
         (relaxed_simd_enabled, bool, false),
         (exceptions_enabled, bool, false),
         (multi_value_enabled, bool, true),
@@ -319,6 +307,7 @@ impl wasm_smith::Config for CliAndJsonConfig {
         (max_type_size, u32, 1000),
         (canonicalize_nans, bool, false),
         (generate_custom_sections, bool, false),
+        (threads_enabled, bool, false),
     }
 
     fn max_memory_pages(&self, _is_64: bool) -> u64 {

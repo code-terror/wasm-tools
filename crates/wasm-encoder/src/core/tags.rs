@@ -1,5 +1,4 @@
-use crate::{encoders, Section, SectionId};
-use std::convert::TryFrom;
+use crate::{encode_section, Encode, Section, SectionId};
 
 /// An encoder for the tag section.
 ///
@@ -49,22 +48,15 @@ impl TagSection {
     }
 }
 
+impl Encode for TagSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
+    }
+}
+
 impl Section for TagSection {
     fn id(&self) -> u8 {
         SectionId::Tag.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
     }
 }
 
@@ -85,9 +77,9 @@ pub struct TagType {
     pub func_type_idx: u32,
 }
 
-impl TagType {
-    pub(crate) fn encode(&self, bytes: &mut Vec<u8>) {
-        bytes.push(self.kind as u8);
-        bytes.extend(encoders::u32(self.func_type_idx));
+impl Encode for TagType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(self.kind as u8);
+        self.func_type_idx.encode(sink);
     }
 }

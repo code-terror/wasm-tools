@@ -1,4 +1,4 @@
-use crate::{encoders, Section, SectionId};
+use crate::{encode_section, Encode, Section, SectionId};
 
 /// An encoder for the memory section.
 ///
@@ -14,6 +14,7 @@ use crate::{encoders, Section, SectionId};
 ///     minimum: 1,
 ///     maximum: None,
 ///     memory64: false,
+///     shared: false,
 /// });
 ///
 /// let mut module = Module::new();
@@ -51,27 +52,20 @@ impl MemorySection {
     }
 }
 
+impl Encode for MemorySection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
+    }
+}
+
 impl Section for MemorySection {
     fn id(&self) -> u8 {
         SectionId::Memory.into()
     }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
-    }
 }
 
 /// A memory's type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct MemoryType {
     /// Minimum size, in pages, of this memory
     pub minimum: u64,
@@ -79,21 +73,27 @@ pub struct MemoryType {
     pub maximum: Option<u64>,
     /// Whether or not this is a 64-bit memory.
     pub memory64: bool,
+    /// Whether or not this memory is shared.
+    pub shared: bool,
 }
 
-impl MemoryType {
-    pub(crate) fn encode(&self, bytes: &mut Vec<u8>) {
+impl Encode for MemoryType {
+    fn encode(&self, sink: &mut Vec<u8>) {
         let mut flags = 0;
         if self.maximum.is_some() {
             flags |= 0b001;
         }
+        if self.shared {
+            flags |= 0b010;
+        }
         if self.memory64 {
             flags |= 0b100;
         }
-        bytes.push(flags);
-        bytes.extend(encoders::u64(self.minimum));
+
+        sink.push(flags);
+        self.minimum.encode(sink);
         if let Some(max) = self.maximum {
-            bytes.extend(encoders::u64(max));
+            max.encode(sink);
         }
     }
 }

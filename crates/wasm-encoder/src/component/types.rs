@@ -1,6 +1,9 @@
-use crate::{encode_functype, encoders, ComponentSection, ComponentSectionId, EntityType, ValType};
+use crate::{
+    encode_section, ComponentOuterAliasKind, ComponentSection, ComponentSectionId,
+    ComponentTypeRef, CoreOuterAliasKind, Encode, EntityType, ValType,
+};
 
-/// Represents a module type.
+/// Represents the type of a core module.
 #[derive(Debug, Clone, Default)]
 pub struct ModuleType {
     bytes: Vec<u8>,
@@ -9,21 +12,18 @@ pub struct ModuleType {
 }
 
 impl ModuleType {
-    /// Creates a new module type.
+    /// Creates a new core module type.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Define a function in this module type.
-    pub fn function<P, R>(&mut self, params: P, results: R) -> &mut Self
-    where
-        P: IntoIterator<Item = ValType>,
-        P::IntoIter: ExactSizeIterator,
-        R: IntoIterator<Item = ValType>,
-        R::IntoIter: ExactSizeIterator,
-    {
+    /// Defines an outer core type alias in this module type.
+    pub fn alias_outer_core_type(&mut self, count: u32, index: u32) -> &mut Self {
+        self.bytes.push(0x02);
+        CoreOuterAliasKind::Type.encode(&mut self.bytes);
         self.bytes.push(0x01);
-        encode_functype(&mut self.bytes, params, results);
+        count.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
         self.num_added += 1;
         self.types_added += 1;
         self
@@ -31,18 +31,29 @@ impl ModuleType {
 
     /// Defines an import in this module type.
     pub fn import(&mut self, module: &str, name: &str, ty: EntityType) -> &mut Self {
-        self.bytes.push(0x02);
-        self.bytes.extend(encoders::str(module));
-        self.bytes.extend(encoders::str(name));
+        self.bytes.push(0x00);
+        module.encode(&mut self.bytes);
+        name.encode(&mut self.bytes);
         ty.encode(&mut self.bytes);
         self.num_added += 1;
         self
     }
 
+    /// Define a type in this module type.
+    ///
+    /// The returned encoder must be used before adding another definition.
+    #[must_use = "the encoder must be used to encode the type"]
+    pub fn ty(&mut self) -> CoreTypeEncoder {
+        self.bytes.push(0x01);
+        self.num_added += 1;
+        self.types_added += 1;
+        CoreTypeEncoder(&mut self.bytes)
+    }
+
     /// Defines an export in this module type.
     pub fn export(&mut self, name: &str, ty: EntityType) -> &mut Self {
-        self.bytes.push(0x07);
-        self.bytes.extend(encoders::str(name));
+        self.bytes.push(0x03);
+        name.encode(&mut self.bytes);
         ty.encode(&mut self.bytes);
         self.num_added += 1;
         self
@@ -52,10 +63,122 @@ impl ModuleType {
     pub fn type_count(&self) -> u32 {
         self.types_added
     }
+}
 
-    fn encode(&self, bytes: &mut Vec<u8>) {
-        bytes.extend(encoders::u32(self.num_added));
-        bytes.extend(self.bytes.iter().copied());
+impl Encode for ModuleType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(0x50);
+        self.num_added.encode(sink);
+        sink.extend(&self.bytes);
+    }
+}
+
+/// Used to encode core types.
+#[derive(Debug)]
+pub struct CoreTypeEncoder<'a>(pub(crate) &'a mut Vec<u8>);
+
+impl<'a> CoreTypeEncoder<'a> {
+    /// Define a function type.
+    pub fn function<P, R>(self, params: P, results: R)
+    where
+        P: IntoIterator<Item = ValType>,
+        P::IntoIter: ExactSizeIterator,
+        R: IntoIterator<Item = ValType>,
+        R::IntoIter: ExactSizeIterator,
+    {
+        let params = params.into_iter();
+        let results = results.into_iter();
+
+        self.0.push(0x60);
+        params.len().encode(self.0);
+        self.0.extend(params.map(u8::from));
+        results.len().encode(self.0);
+        self.0.extend(results.map(u8::from));
+    }
+
+    /// Define a module type.
+    pub fn module(self, ty: &ModuleType) {
+        ty.encode(self.0);
+    }
+}
+
+/// An encoder for the core type section of WebAssembly components.
+///
+/// # Example
+///
+/// ```rust
+/// use wasm_encoder::{Component, CoreTypeSection, ModuleType};
+///
+/// let mut types = CoreTypeSection::new();
+///
+/// types.module(&ModuleType::new());
+///
+/// let mut component = Component::new();
+/// component.section(&types);
+///
+/// let bytes = component.finish();
+/// ```
+#[derive(Clone, Debug, Default)]
+pub struct CoreTypeSection {
+    bytes: Vec<u8>,
+    num_added: u32,
+}
+
+impl CoreTypeSection {
+    /// Create a new core type section encoder.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The number of types in the section.
+    pub fn len(&self) -> u32 {
+        self.num_added
+    }
+
+    /// Determines if the section is empty.
+    pub fn is_empty(&self) -> bool {
+        self.num_added == 0
+    }
+
+    /// Encode a type into this section.
+    ///
+    /// The returned encoder must be finished before adding another type.
+    #[must_use = "the encoder must be used to encode the type"]
+    pub fn ty(&mut self) -> CoreTypeEncoder<'_> {
+        self.num_added += 1;
+        CoreTypeEncoder(&mut self.bytes)
+    }
+
+    /// Define a function type in this type section.
+    pub fn function<P, R>(&mut self, params: P, results: R) -> &mut Self
+    where
+        P: IntoIterator<Item = ValType>,
+        P::IntoIter: ExactSizeIterator,
+        R: IntoIterator<Item = ValType>,
+        R::IntoIter: ExactSizeIterator,
+    {
+        self.ty().function(params, results);
+        self
+    }
+
+    /// Define a module type in this type section.
+    ///
+    /// Currently this is only used for core type sections in components.
+    pub fn module(&mut self, ty: &ModuleType) -> &mut Self {
+        self.ty().module(ty);
+        self
+    }
+}
+
+impl Encode for CoreTypeSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
+    }
+}
+
+impl ComponentSection for CoreTypeSection {
+    fn id(&self) -> u8 {
+        ComponentSectionId::CoreType.into()
     }
 }
 
@@ -64,6 +187,7 @@ impl ModuleType {
 pub struct ComponentType {
     bytes: Vec<u8>,
     num_added: u32,
+    core_types_added: u32,
     types_added: u32,
 }
 
@@ -73,59 +197,86 @@ impl ComponentType {
         Self::default()
     }
 
+    /// Define a core type in this component type.
+    ///
+    /// The returned encoder must be used before adding another definition.
+    #[must_use = "the encoder must be used to encode the type"]
+    pub fn core_type(&mut self) -> CoreTypeEncoder {
+        self.bytes.push(0x00);
+        self.num_added += 1;
+        self.core_types_added += 1;
+        CoreTypeEncoder(&mut self.bytes)
+    }
+
     /// Define a type in this component type.
     ///
-    /// The returned encoder must be finished before adding another definition.
+    /// The returned encoder must be used before adding another definition.
     #[must_use = "the encoder must be used to encode the type"]
-    pub fn ty(&mut self) -> TypeEncoder {
+    pub fn ty(&mut self) -> ComponentTypeEncoder {
         self.bytes.push(0x01);
         self.num_added += 1;
         self.types_added += 1;
-        TypeEncoder(&mut self.bytes)
+        ComponentTypeEncoder(&mut self.bytes)
+    }
+
+    /// Defines an outer core type alias in this component type.
+    pub fn alias_outer_core_type(&mut self, count: u32, index: u32) -> &mut Self {
+        self.bytes.push(0x02);
+        ComponentOuterAliasKind::CoreType.encode(&mut self.bytes);
+        self.bytes.push(0x01);
+        count.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
+        self.num_added += 1;
+        self.types_added += 1;
+        self
+    }
+
+    /// Defines an outer type alias in this component type.
+    pub fn alias_outer_type(&mut self, count: u32, index: u32) -> &mut Self {
+        self.bytes.push(0x02);
+        ComponentOuterAliasKind::Type.encode(&mut self.bytes);
+        self.bytes.push(0x01);
+        count.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
+        self.num_added += 1;
+        self.types_added += 1;
+        self
     }
 
     /// Defines an import in this component type.
-    ///
-    /// The type is expected to be an index to a previously defined or aliased type.
-    pub fn import(&mut self, name: &str, ty: u32) -> &mut Self {
-        self.bytes.push(0x02);
-        self.bytes.extend(encoders::str(name));
-        self.bytes.extend(encoders::u32(ty));
+    pub fn import(&mut self, name: &str, ty: ComponentTypeRef) -> &mut Self {
+        self.bytes.push(0x03);
+        name.encode(&mut self.bytes);
+        ty.encode(&mut self.bytes);
         self.num_added += 1;
         self
     }
 
     /// Defines an export in this component type.
-    ///
-    /// The type is expected to be an index to a previously defined or aliased type.
-    pub fn export(&mut self, name: &str, ty: u32) -> &mut Self {
-        self.bytes.push(0x07);
-        self.bytes.extend(encoders::str(name));
-        self.bytes.extend(encoders::u32(ty));
+    pub fn export(&mut self, name: &str, ty: ComponentTypeRef) -> &mut Self {
+        self.bytes.push(0x04);
+        name.encode(&mut self.bytes);
+        ty.encode(&mut self.bytes);
         self.num_added += 1;
         self
     }
 
-    /// Defines an alias to an outer type in this component type.
-    pub fn alias_outer_type(&mut self, count: u32, index: u32) -> &mut Self {
-        self.bytes.push(0x09);
-        self.bytes.push(0x02);
-        self.bytes.push(0x05);
-        self.bytes.extend(encoders::u32(count));
-        self.bytes.extend(encoders::u32(index));
-        self.num_added += 1;
-        self.types_added += 1;
-        self
+    /// Gets the number of core types that have been added to this component type.
+    pub fn core_type_count(&self) -> u32 {
+        self.core_types_added
     }
 
     /// Gets the number of types that have been added or aliased in this component type.
     pub fn type_count(&self) -> u32 {
         self.types_added
     }
+}
 
-    fn encode(&self, bytes: &mut Vec<u8>) {
-        bytes.extend(encoders::u32(self.num_added));
-        bytes.extend(self.bytes.iter().copied());
+impl Encode for ComponentType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(0x41);
+        self.num_added.encode(sink);
+        sink.extend(&self.bytes);
     }
 }
 
@@ -134,6 +285,7 @@ impl ComponentType {
 pub struct InstanceType {
     bytes: Vec<u8>,
     num_added: u32,
+    core_types_added: u32,
     types_added: u32,
 }
 
@@ -143,91 +295,111 @@ impl InstanceType {
         Self::default()
     }
 
+    /// Define a core type in this instance type.
+    ///
+    /// The returned encoder must be used before adding another definition.
+    #[must_use = "the encoder must be used to encode the type"]
+    pub fn core_type(&mut self) -> CoreTypeEncoder {
+        self.bytes.push(0x00);
+        self.num_added += 1;
+        self.core_types_added += 1;
+        CoreTypeEncoder(&mut self.bytes)
+    }
+
     /// Define a type in this instance type.
     ///
-    /// The returned encoder must be finished before adding another definition.
+    /// The returned encoder must be used before adding another definition.
     #[must_use = "the encoder must be used to encode the type"]
-    pub fn ty(&mut self) -> TypeEncoder {
+    pub fn ty(&mut self) -> ComponentTypeEncoder {
         self.bytes.push(0x01);
         self.num_added += 1;
         self.types_added += 1;
-        TypeEncoder(&mut self.bytes)
+        ComponentTypeEncoder(&mut self.bytes)
     }
 
-    /// Defines an export in this instance type.
-    ///
-    /// The type is expected to be an index to a previously defined or aliased type.
-    pub fn export(&mut self, name: &str, ty: u32) -> &mut Self {
-        self.bytes.push(0x07);
-        self.bytes.extend(encoders::str(name));
-        self.bytes.extend(encoders::u32(ty));
-        self.num_added += 1;
-        self
-    }
-
-    /// Defines an alias to an outer type in this instance type.
-    pub fn alias_outer_type(&mut self, count: u32, index: u32) -> &mut Self {
-        self.bytes.push(0x09);
+    /// Defines an outer core type alias in this component type.
+    pub fn alias_outer_core_type(&mut self, count: u32, index: u32) -> &mut Self {
         self.bytes.push(0x02);
-        self.bytes.push(0x05);
-        self.bytes.extend(encoders::u32(count));
-        self.bytes.extend(encoders::u32(index));
+        ComponentOuterAliasKind::CoreType.encode(&mut self.bytes);
+        self.bytes.push(0x01);
+        count.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
         self.num_added += 1;
         self.types_added += 1;
         self
+    }
+
+    /// Defines an alias in this instance type.
+    pub fn alias_outer_type(&mut self, count: u32, index: u32) -> &mut Self {
+        self.bytes.push(0x02);
+        ComponentOuterAliasKind::Type.encode(&mut self.bytes);
+        self.bytes.push(0x01);
+        count.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
+        self.num_added += 1;
+        self.types_added += 1;
+        self
+    }
+
+    /// Defines an export in this instance type.
+    pub fn export(&mut self, name: &str, ty: ComponentTypeRef) -> &mut Self {
+        self.bytes.push(0x04);
+        name.encode(&mut self.bytes);
+        ty.encode(&mut self.bytes);
+        self.num_added += 1;
+        self
+    }
+
+    /// Gets the number of core types that have been added to this instance type.
+    pub fn core_type_count(&self) -> u32 {
+        self.core_types_added
     }
 
     /// Gets the number of types that have been added or aliased in this instance type.
     pub fn type_count(&self) -> u32 {
         self.types_added
     }
+}
 
-    fn encode(&self, bytes: &mut Vec<u8>) {
-        bytes.extend(encoders::u32(self.num_added));
-        bytes.extend(self.bytes.iter().copied());
+impl Encode for InstanceType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(0x42);
+        self.num_added.encode(sink);
+        sink.extend(&self.bytes);
     }
 }
 
-/// Used to encode types.
+/// Used to encode component and instance types.
 #[derive(Debug)]
-pub struct TypeEncoder<'a>(&'a mut Vec<u8>);
+pub struct ComponentTypeEncoder<'a>(&'a mut Vec<u8>);
 
-impl<'a> TypeEncoder<'a> {
-    /// Define a module type.
-    pub fn module(self, ty: &ModuleType) {
-        self.0.push(0x4f);
-        ty.encode(self.0);
-    }
-
+impl<'a> ComponentTypeEncoder<'a> {
     /// Define a component type.
     pub fn component(self, ty: &ComponentType) {
-        self.0.push(0x4e);
         ty.encode(self.0);
     }
 
     /// Define an instance type.
     pub fn instance(self, ty: &InstanceType) {
-        self.0.push(0x4d);
         ty.encode(self.0);
     }
 
     /// Define a function type.
-    pub fn function<'b, P, T>(self, params: P, result: impl Into<InterfaceTypeRef>)
+    pub fn function<'b, P, T>(self, params: P, result: impl Into<ComponentValType>)
     where
         P: IntoIterator<Item = (Option<&'b str>, T)>,
         P::IntoIter: ExactSizeIterator,
-        T: Into<InterfaceTypeRef>,
+        T: Into<ComponentValType>,
     {
         let params = params.into_iter();
-        self.0.push(0x4c);
+        self.0.push(0x40);
 
-        self.0
-            .extend(encoders::u32(u32::try_from(params.len()).unwrap()));
+        params.len().encode(self.0);
         for (name, ty) in params {
             match name {
                 Some(name) => {
                     self.0.push(0x01);
-                    self.0.extend(encoders::str(name));
+                    name.encode(self.0);
                 }
                 None => self.0.push(0x00),
             }
@@ -237,24 +409,18 @@ impl<'a> TypeEncoder<'a> {
         result.into().encode(self.0);
     }
 
-    /// Define a value type.
-    pub fn value(self, ty: impl Into<InterfaceTypeRef>) {
-        self.0.push(0x4b);
-        ty.into().encode(self.0);
-    }
-
-    /// Define an interface type.
+    /// Define a defined component type.
     ///
-    /// The returned encoder must be finished before adding another type.
+    /// The returned encoder must be used before adding another type.
     #[must_use = "the encoder must be used to encode the type"]
-    pub fn interface_type(self) -> InterfaceTypeEncoder<'a> {
-        InterfaceTypeEncoder(self.0)
+    pub fn defined_type(self) -> ComponentDefinedTypeEncoder<'a> {
+        ComponentDefinedTypeEncoder(self.0)
     }
 }
 
-/// Represents a primitive interface type.
+/// Represents a primitive component value type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PrimitiveInterfaceType {
+pub enum PrimitiveValType {
     /// The type is the unit type.
     Unit,
     /// The type is a boolean.
@@ -285,60 +451,60 @@ pub enum PrimitiveInterfaceType {
     String,
 }
 
-impl PrimitiveInterfaceType {
-    fn encode(&self, bytes: &mut Vec<u8>) {
-        match self {
-            Self::Unit => bytes.push(0x7f),
-            Self::Bool => bytes.push(0x7e),
-            Self::S8 => bytes.push(0x7d),
-            Self::U8 => bytes.push(0x7c),
-            Self::S16 => bytes.push(0x7b),
-            Self::U16 => bytes.push(0x7a),
-            Self::S32 => bytes.push(0x79),
-            Self::U32 => bytes.push(0x78),
-            Self::S64 => bytes.push(0x77),
-            Self::U64 => bytes.push(0x76),
-            Self::Float32 => bytes.push(0x75),
-            Self::Float64 => bytes.push(0x74),
-            Self::Char => bytes.push(0x73),
-            Self::String => bytes.push(0x72),
-        }
+impl Encode for PrimitiveValType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(match self {
+            Self::Unit => 0x7f,
+            Self::Bool => 0x7e,
+            Self::S8 => 0x7d,
+            Self::U8 => 0x7c,
+            Self::S16 => 0x7b,
+            Self::U16 => 0x7a,
+            Self::S32 => 0x79,
+            Self::U32 => 0x78,
+            Self::S64 => 0x77,
+            Self::U64 => 0x76,
+            Self::Float32 => 0x75,
+            Self::Float64 => 0x74,
+            Self::Char => 0x73,
+            Self::String => 0x72,
+        });
     }
 }
 
-/// Represents a reference to an interface type.
+/// Represents a component value type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum InterfaceTypeRef {
-    /// The reference is to a primitive type.
-    Primitive(PrimitiveInterfaceType),
-    /// The reference is to a type index.
+pub enum ComponentValType {
+    /// The value is a primitive type.
+    Primitive(PrimitiveValType),
+    /// The value is to a defined value type.
     ///
-    /// The type index must be to an interface type.
+    /// The type index must be to a value type.
     Type(u32),
 }
 
-impl InterfaceTypeRef {
-    fn encode(&self, bytes: &mut Vec<u8>) {
+impl Encode for ComponentValType {
+    fn encode(&self, sink: &mut Vec<u8>) {
         match self {
-            Self::Primitive(ty) => ty.encode(bytes),
-            Self::Type(index) => bytes.extend(encoders::s33(*index as i64)),
+            Self::Primitive(ty) => ty.encode(sink),
+            Self::Type(index) => (*index as i64).encode(sink),
         }
     }
 }
 
-impl From<PrimitiveInterfaceType> for InterfaceTypeRef {
-    fn from(ty: PrimitiveInterfaceType) -> Self {
+impl From<PrimitiveValType> for ComponentValType {
+    fn from(ty: PrimitiveValType) -> Self {
         Self::Primitive(ty)
     }
 }
 
-/// Used for encoding interface types.
+/// Used for encoding component defined types.
 #[derive(Debug)]
-pub struct InterfaceTypeEncoder<'a>(&'a mut Vec<u8>);
+pub struct ComponentDefinedTypeEncoder<'a>(&'a mut Vec<u8>);
 
-impl InterfaceTypeEncoder<'_> {
-    /// Define a primitive interface type.
-    pub fn primitive(self, ty: PrimitiveInterfaceType) {
+impl ComponentDefinedTypeEncoder<'_> {
+    /// Define a primitive value type.
+    pub fn primitive(self, ty: PrimitiveValType) {
         ty.encode(self.0);
     }
 
@@ -347,14 +513,13 @@ impl InterfaceTypeEncoder<'_> {
     where
         F: IntoIterator<Item = (&'a str, T)>,
         F::IntoIter: ExactSizeIterator,
-        T: Into<InterfaceTypeRef>,
+        T: Into<ComponentValType>,
     {
         let fields = fields.into_iter();
         self.0.push(0x71);
-        self.0
-            .extend(encoders::u32(fields.len().try_into().unwrap()));
+        fields.len().encode(self.0);
         for (name, ty) in fields {
-            self.0.extend(encoders::str(name));
+            name.encode(self.0);
             ty.into().encode(self.0);
         }
     }
@@ -364,18 +529,17 @@ impl InterfaceTypeEncoder<'_> {
     where
         C: IntoIterator<Item = (&'a str, T, Option<u32>)>,
         C::IntoIter: ExactSizeIterator,
-        T: Into<InterfaceTypeRef>,
+        T: Into<ComponentValType>,
     {
         let cases = cases.into_iter();
         self.0.push(0x70);
-        self.0
-            .extend(encoders::u32(cases.len().try_into().unwrap()));
-        for (name, ty, default_to) in cases {
-            self.0.extend(encoders::str(name));
+        cases.len().encode(self.0);
+        for (name, ty, refines) in cases {
+            name.encode(self.0);
             ty.into().encode(self.0);
-            if let Some(default) = default_to {
+            if let Some(default) = refines {
                 self.0.push(0x01);
-                self.0.extend(encoders::u32(default));
+                default.encode(self.0);
             } else {
                 self.0.push(0x00);
             }
@@ -383,7 +547,7 @@ impl InterfaceTypeEncoder<'_> {
     }
 
     /// Define a list type.
-    pub fn list(self, ty: impl Into<InterfaceTypeRef>) {
+    pub fn list(self, ty: impl Into<ComponentValType>) {
         self.0.push(0x6f);
         ty.into().encode(self.0);
     }
@@ -393,12 +557,11 @@ impl InterfaceTypeEncoder<'_> {
     where
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
-        T: Into<InterfaceTypeRef>,
+        T: Into<ComponentValType>,
     {
         let types = types.into_iter();
         self.0.push(0x6E);
-        self.0
-            .extend(encoders::u32(types.len().try_into().unwrap()));
+        types.len().encode(self.0);
         for ty in types {
             ty.into().encode(self.0);
         }
@@ -412,10 +575,9 @@ impl InterfaceTypeEncoder<'_> {
     {
         let names = names.into_iter();
         self.0.push(0x6D);
-        self.0
-            .extend(encoders::u32(names.len().try_into().unwrap()));
+        names.len().encode(self.0);
         for name in names {
-            self.0.extend(encoders::str(name));
+            name.encode(self.0);
         }
     }
 
@@ -427,9 +589,9 @@ impl InterfaceTypeEncoder<'_> {
     {
         let tags = tags.into_iter();
         self.0.push(0x6C);
-        self.0.extend(encoders::u32(tags.len().try_into().unwrap()));
+        tags.len().encode(self.0);
         for tag in tags {
-            self.0.extend(encoders::str(tag));
+            tag.encode(self.0);
         }
     }
 
@@ -438,25 +600,24 @@ impl InterfaceTypeEncoder<'_> {
     where
         I: IntoIterator<Item = T>,
         I::IntoIter: ExactSizeIterator,
-        T: Into<InterfaceTypeRef>,
+        T: Into<ComponentValType>,
     {
         let types = types.into_iter();
         self.0.push(0x6B);
-        self.0
-            .extend(encoders::u32(types.len().try_into().unwrap()));
+        types.len().encode(self.0);
         for ty in types {
             ty.into().encode(self.0);
         }
     }
 
     /// Define an option type.
-    pub fn option(self, ty: impl Into<InterfaceTypeRef>) {
+    pub fn option(self, ty: impl Into<ComponentValType>) {
         self.0.push(0x6A);
         ty.into().encode(self.0);
     }
 
     /// Define an expected type.
-    pub fn expected(self, ok: impl Into<InterfaceTypeRef>, error: impl Into<InterfaceTypeRef>) {
+    pub fn expected(self, ok: impl Into<ComponentValType>, error: impl Into<ComponentValType>) {
         self.0.push(0x69);
         ok.into().encode(self.0);
         error.into().encode(self.0);
@@ -468,16 +629,17 @@ impl InterfaceTypeEncoder<'_> {
 /// # Example
 ///
 /// ```rust
-/// use wasm_encoder::{Component, ComponentTypeSection, PrimitiveInterfaceType};
+/// use wasm_encoder::{Component, ComponentTypeSection, PrimitiveValType};
 ///
 /// let mut types = ComponentTypeSection::new();
 ///
+/// // Define a function type of `[string, string] -> string`.
 /// types.function(
 ///   [
-///     (Some("a"), PrimitiveInterfaceType::String),
-///     (Some("b"), PrimitiveInterfaceType::String)
+///     (Some("a"), PrimitiveValType::String),
+///     (Some("b"), PrimitiveValType::String)
 ///   ],
-///   PrimitiveInterfaceType::String
+///   PrimitiveValType::String
 /// );
 ///
 /// let mut component = Component::new();
@@ -511,15 +673,9 @@ impl ComponentTypeSection {
     ///
     /// The returned encoder must be finished before adding another type.
     #[must_use = "the encoder must be used to encode the type"]
-    pub fn ty(&mut self) -> TypeEncoder<'_> {
+    pub fn ty(&mut self) -> ComponentTypeEncoder<'_> {
         self.num_added += 1;
-        TypeEncoder(&mut self.bytes)
-    }
-
-    /// Define a module type in this type section.
-    pub fn module(&mut self, ty: &ModuleType) -> &mut Self {
-        self.ty().module(ty);
-        self
+        ComponentTypeEncoder(&mut self.bytes)
     }
 
     /// Define a component type in this type section.
@@ -538,47 +694,34 @@ impl ComponentTypeSection {
     pub fn function<'a, P, T>(
         &mut self,
         params: P,
-        result: impl Into<InterfaceTypeRef>,
+        result: impl Into<ComponentValType>,
     ) -> &mut Self
     where
         P: IntoIterator<Item = (Option<&'a str>, T)>,
         P::IntoIter: ExactSizeIterator,
-        T: Into<InterfaceTypeRef>,
+        T: Into<ComponentValType>,
     {
         self.ty().function(params, result);
         self
     }
 
-    /// Define a value type in this type section.
-    pub fn value(&mut self, ty: impl Into<InterfaceTypeRef>) -> &mut Self {
-        self.ty().value(ty);
-        self
-    }
-
-    /// Define an interface type in this type section.
+    /// Add a component defined type to this type section.
     ///
-    /// The returned encoder must be finished before adding another type.
+    /// The returned encoder must be used before adding another type.
     #[must_use = "the encoder must be used to encode the type"]
-    pub fn interface_type(&mut self) -> InterfaceTypeEncoder<'_> {
-        self.ty().interface_type()
+    pub fn defined_type(&mut self) -> ComponentDefinedTypeEncoder<'_> {
+        self.ty().defined_type()
+    }
+}
+
+impl Encode for ComponentTypeSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
     }
 }
 
 impl ComponentSection for ComponentTypeSection {
     fn id(&self) -> u8 {
         ComponentSectionId::Type.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
     }
 }

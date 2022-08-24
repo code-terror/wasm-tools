@@ -2,7 +2,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use rand::{rngs::SmallRng, RngCore, SeedableRng};
 use std::collections::HashMap;
 use wasm_smith::{Config, ConfiguredModule, Module, SwarmConfig};
-use wasmparser::{Parser, Type, TypeRef, Validator, WasmFeatures};
+use wasmparser::{Parser, TypeRef, ValType, Validator, WasmFeatures};
 
 #[test]
 fn smoke_test_module() {
@@ -131,7 +131,7 @@ fn smoke_test_imports_config() {
                     // Gather the signature types to later check function types against.
                     while let Ok(ty) = rdr.read() {
                         match ty {
-                            wasmparser::TypeDef::Func(ft) => sig_types.push(ft),
+                            wasmparser::Type::Func(ft) => sig_types.push(ft),
                         }
                     }
                 } else if let wasmparser::Payload::ImportSection(mut rdr) = payload {
@@ -197,6 +197,23 @@ fn smoke_test_imports_config() {
     assert!(n_partial > 0);
 }
 
+#[test]
+fn smoke_test_no_trapping_mode() {
+    let mut rng = SmallRng::seed_from_u64(0);
+    let mut buf = vec![0; 2048];
+    for _ in 0..1024 {
+        rng.fill_bytes(&mut buf);
+        let u = Unstructured::new(&buf);
+        if let Ok(mut module) = Module::arbitrary_take_rest(u) {
+            if module.no_traps().is_ok() {
+                let wasm_bytes = module.to_bytes();
+                let mut validator = Validator::new_with_features(wasm_features());
+                validate(&mut validator, &wasm_bytes);
+            }
+        }
+    }
+}
+
 fn wasm_features() -> WasmFeatures {
     WasmFeatures {
         multi_memory: true,
@@ -209,10 +226,10 @@ fn wasm_features() -> WasmFeatures {
 
 #[derive(Debug)]
 enum AvailableImportKind {
-    Func(&'static [Type], &'static [Type]),
-    Tag(&'static [Type]),
-    Global(Type),
-    Table(Type),
+    Func(&'static [ValType], &'static [ValType]),
+    Tag(&'static [ValType]),
+    Global(ValType),
+    Table(ValType),
     Memory,
 }
 
@@ -225,7 +242,7 @@ fn import_config(
     let mut config = SwarmConfig::arbitrary(u).expect("arbitrary swarm");
     config.exceptions_enabled = u.arbitrary().expect("exceptions enabled for swarm");
     let available = {
-        use {AvailableImportKind::*, Type::*};
+        use {AvailableImportKind::*, ValType::*};
         vec![
             ("env", "pi", Func(&[I32], &[])),
             ("env", "pi2", Func(&[I32], &[])),

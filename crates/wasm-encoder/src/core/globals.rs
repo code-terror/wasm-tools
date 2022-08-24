@@ -1,4 +1,4 @@
-use crate::{encoders, Instruction, Section, SectionId, ValType};
+use crate::{encode_section, ConstExpr, Encode, Section, SectionId, ValType};
 
 /// An encoder for the global section.
 ///
@@ -7,7 +7,7 @@ use crate::{encoders, Instruction, Section, SectionId, ValType};
 /// # Example
 ///
 /// ```
-/// use wasm_encoder::{Module, GlobalSection, GlobalType, Instruction, ValType};
+/// use wasm_encoder::{ConstExpr, Module, GlobalSection, GlobalType, Instruction, ValType};
 ///
 /// let mut globals = GlobalSection::new();
 /// globals.global(
@@ -15,7 +15,7 @@ use crate::{encoders, Instruction, Section, SectionId, ValType};
 ///         val_type: ValType::I32,
 ///         mutable: false,
 ///     },
-///     &Instruction::I32Const(42),
+///     &ConstExpr::i32_const(42),
 /// );
 ///
 /// let mut module = Module::new();
@@ -46,10 +46,9 @@ impl GlobalSection {
     }
 
     /// Define a global.
-    pub fn global(&mut self, global_type: GlobalType, init_expr: &Instruction<'_>) -> &mut Self {
+    pub fn global(&mut self, global_type: GlobalType, init_expr: &ConstExpr) -> &mut Self {
         global_type.encode(&mut self.bytes);
         init_expr.encode(&mut self.bytes);
-        Instruction::End.encode(&mut self.bytes);
         self.num_added += 1;
         self
     }
@@ -62,27 +61,20 @@ impl GlobalSection {
     }
 }
 
+impl Encode for GlobalSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
+    }
+}
+
 impl Section for GlobalSection {
     fn id(&self) -> u8 {
         SectionId::Global.into()
     }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
-    }
 }
 
 /// A global's type.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct GlobalType {
     /// This global's value type.
     pub val_type: ValType,
@@ -90,9 +82,9 @@ pub struct GlobalType {
     pub mutable: bool,
 }
 
-impl GlobalType {
-    pub(crate) fn encode(&self, bytes: &mut Vec<u8>) {
-        bytes.push(self.val_type.into());
-        bytes.push(self.mutable as u8);
+impl Encode for GlobalType {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.val_type.encode(sink);
+        sink.push(self.mutable as u8);
     }
 }

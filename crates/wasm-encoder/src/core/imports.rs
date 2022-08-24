@@ -1,6 +1,6 @@
 use crate::{
-    encoders, ComponentSection, ComponentSectionId, GlobalType, MemoryType, Section, SectionId,
-    TableType, TagType,
+    encode_section, Encode, GlobalType, MemoryType, Section, SectionId, TableType, TagType,
+    CORE_FUNCTION_SORT, CORE_GLOBAL_SORT, CORE_MEMORY_SORT, CORE_TABLE_SORT, CORE_TAG_SORT,
 };
 
 /// The type of an entity.
@@ -22,28 +22,28 @@ pub enum EntityType {
     Tag(TagType),
 }
 
-impl EntityType {
-    pub(crate) fn encode(&self, bytes: &mut Vec<u8>) {
+impl Encode for EntityType {
+    fn encode(&self, sink: &mut Vec<u8>) {
         match self {
             Self::Function(i) => {
-                bytes.push(0x00);
-                bytes.extend(encoders::u32(*i));
+                sink.push(CORE_FUNCTION_SORT);
+                i.encode(sink);
             }
             Self::Table(t) => {
-                bytes.push(0x01);
-                t.encode(bytes);
+                sink.push(CORE_TABLE_SORT);
+                t.encode(sink);
             }
             Self::Memory(t) => {
-                bytes.push(0x02);
-                t.encode(bytes);
+                sink.push(CORE_MEMORY_SORT);
+                t.encode(sink);
             }
             Self::Global(t) => {
-                bytes.push(0x03);
-                t.encode(bytes);
+                sink.push(CORE_GLOBAL_SORT);
+                t.encode(sink);
             }
             Self::Tag(t) => {
-                bytes.push(0x04);
-                t.encode(bytes);
+                sink.push(CORE_TAG_SORT);
+                t.encode(sink);
             }
         }
     }
@@ -88,6 +88,7 @@ impl From<TagType> for EntityType {
 ///         minimum: 1,
 ///         maximum: None,
 ///         memory64: false,
+///         shared: false,
 ///     }
 /// );
 ///
@@ -120,94 +121,22 @@ impl ImportSection {
 
     /// Define an import in the import section.
     pub fn import(&mut self, module: &str, field: &str, ty: impl Into<EntityType>) -> &mut Self {
-        self.bytes.extend(encoders::str(module));
-        self.bytes.extend(encoders::str(field));
+        module.encode(&mut self.bytes);
+        field.encode(&mut self.bytes);
         ty.into().encode(&mut self.bytes);
         self.num_added += 1;
         self
     }
 }
 
+impl Encode for ImportSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
+    }
+}
+
 impl Section for ImportSection {
     fn id(&self) -> u8 {
         SectionId::Import.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
-    }
-}
-
-/// An encoder for the import section of WebAssembly components.
-///
-/// # Example
-///
-/// ```rust
-/// use wasm_encoder::{Component, ComponentImportSection};
-///
-/// let mut imports = ComponentImportSection::new();
-/// imports.import("f", 0);
-///
-/// let mut component = Component::new();
-/// component.section(&imports);
-///
-/// let bytes = component.finish();
-/// ```
-#[derive(Clone, Debug, Default)]
-pub struct ComponentImportSection {
-    bytes: Vec<u8>,
-    num_added: u32,
-}
-
-impl ComponentImportSection {
-    /// Create a new component import section encoder.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// The number of imports in the section.
-    pub fn len(&self) -> u32 {
-        self.num_added
-    }
-
-    /// Determines if the section is empty.
-    pub fn is_empty(&self) -> bool {
-        self.num_added == 0
-    }
-
-    /// Define an import in the component import section.
-    pub fn import(&mut self, name: &str, ty: u32) -> &mut Self {
-        self.bytes.extend(encoders::str(name));
-        self.bytes.extend(encoders::u32(ty));
-        self.num_added += 1;
-        self
-    }
-}
-
-impl ComponentSection for ComponentImportSection {
-    fn id(&self) -> u8 {
-        ComponentSectionId::Import.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
     }
 }

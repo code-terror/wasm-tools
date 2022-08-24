@@ -26,7 +26,7 @@
 //!
 //! ```
 //! use wasm_encoder::{
-//!     CodeSection, Export, ExportSection, Function, FunctionSection, Instruction,
+//!     CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction,
 //!     Module, TypeSection, ValType,
 //! };
 //!
@@ -47,7 +47,7 @@
 //!
 //! // Encode the export section.
 //! let mut exports = ExportSection::new();
-//! exports.export("f", Export::Function(0));
+//! exports.export("f", ExportKind::Func, 0);
 //! module.section(&exports);
 //!
 //! // Encode the code section.
@@ -72,14 +72,88 @@
 
 mod component;
 mod core;
-mod custom;
 mod raw;
 
 pub use self::component::*;
 pub use self::core::*;
-pub use self::custom::*;
 pub use self::raw::*;
-pub mod encoders;
+
+/// Implemented by types that can be encoded into a byte sink.
+pub trait Encode {
+    /// Encode the type into the given byte sink.
+    fn encode(&self, sink: &mut Vec<u8>);
+}
+
+impl<T: Encode + ?Sized> Encode for &'_ T {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        T::encode(self, sink)
+    }
+}
+
+impl<T: Encode> Encode for [T] {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.len().encode(sink);
+        for item in self {
+            item.encode(sink);
+        }
+    }
+}
+
+impl Encode for [u8] {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.len().encode(sink);
+        sink.extend(self);
+    }
+}
+
+impl Encode for str {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.len().encode(sink);
+        sink.extend_from_slice(self.as_bytes());
+    }
+}
+
+impl Encode for usize {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        assert!(*self <= u32::max_value() as usize);
+        (*self as u32).encode(sink)
+    }
+}
+
+impl Encode for u32 {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        leb128::write::unsigned(sink, (*self).into()).unwrap();
+    }
+}
+
+impl Encode for i32 {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        leb128::write::signed(sink, (*self).into()).unwrap();
+    }
+}
+
+impl Encode for u64 {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        leb128::write::unsigned(sink, *self).unwrap();
+    }
+}
+
+impl Encode for i64 {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        leb128::write::signed(sink, *self).unwrap();
+    }
+}
+
+fn encoding_size(n: u32) -> usize {
+    let mut buf = [0u8; 5];
+    leb128::write::unsigned(&mut &mut buf[..], n.into()).unwrap()
+}
+
+fn encode_section(sink: &mut Vec<u8>, count: u32, bytes: &[u8]) {
+    (encoding_size(count) + bytes.len()).encode(sink);
+    count.encode(sink);
+    sink.extend(bytes);
+}
 
 #[cfg(test)]
 mod test {
@@ -88,18 +162,12 @@ mod test {
     #[test]
     fn it_encodes_an_empty_module() {
         let bytes = Module::new().finish();
-        assert_eq!(
-            bytes,
-            [0x00, 'a' as u8, 's' as u8, 'm' as u8, 0x01, 0x00, 0x00, 0x00]
-        );
+        assert_eq!(bytes, [0x00, b'a', b's', b'm', 0x01, 0x00, 0x00, 0x00]);
     }
 
     #[test]
     fn it_encodes_an_empty_component() {
         let bytes = Component::new().finish();
-        assert_eq!(
-            bytes,
-            [0x00, 'a' as u8, 's' as u8, 'm' as u8, 0x0a, 0x00, 0x01, 0x00]
-        );
+        assert_eq!(bytes, [0x00, b'a', b's', b'm', 0x0a, 0x00, 0x01, 0x00]);
     }
 }

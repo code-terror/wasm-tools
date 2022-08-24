@@ -3,12 +3,12 @@ authors = ["Nick Fitzgerald <fitzgen@gmail.com>"]
 categories = ["command-line-utilities", "development-tools", "development-tools::testing", "wasm"]
 description = "A WebAssembly test case generator"
 documentation = "https://docs.rs/wasm-smith"
-edition = "2018"
+edition = "2021"
 license = "Apache-2.0 WITH LLVM-exception"
 name = "wasm-smith"
 readme = "./README.md"
 repository = "https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-smith"
-version = "0.10.0"
+version = "0.11.3"
 exclude = ["/benches/corpus"]
 
 [[bench]]
@@ -21,8 +21,8 @@ flagset = "0.4"
 indexmap = "1.6"
 leb128 = "0.2.4"
 serde = { version = "1", features = ['derive'], optional = true }
-wasm-encoder = { version = "0.11.0", path = "../wasm-encoder" }
-wasmparser = { version = "0.84", path = "../wasmparser" }
+wasm-encoder = { version = "0.15.0", path = "../wasm-encoder" }
+wasmparser = { version = "0.88.0", path = "../wasmparser" }
 
 [dev-dependencies]
 criterion = "0.3.3"

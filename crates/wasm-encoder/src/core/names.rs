@@ -1,4 +1,4 @@
-use crate::{encoders, Section, SectionId};
+use crate::{encoding_size, CustomSection, Encode, Section, SectionId};
 
 /// An encoder for the custom `name` section.
 ///
@@ -56,10 +56,9 @@ impl NameSection {
     /// `name` specified. Note that this should be encoded first before other
     /// subsections.
     pub fn module(&mut self, name: &str) {
-        let len = encoders::u32(u32::try_from(name.len()).unwrap());
-        self.subsection_header(Subsection::Module, len.len() + name.len());
-        self.bytes.extend(len);
-        self.bytes.extend(name.as_bytes());
+        let len = encoding_size(u32::try_from(name.len()).unwrap());
+        self.subsection_header(Subsection::Module, len + name.len());
+        name.encode(&mut self.bytes);
     }
 
     /// Appends a subsection for the names of all functions in this wasm module.
@@ -148,28 +147,23 @@ impl NameSection {
 
     fn subsection_header(&mut self, id: Subsection, len: usize) {
         self.bytes.push(id as u8);
-        self.bytes
-            .extend(encoders::u32(u32::try_from(len).unwrap()));
+        len.encode(&mut self.bytes);
+    }
+}
+
+impl Encode for NameSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        CustomSection {
+            name: "name",
+            data: &self.bytes,
+        }
+        .encode(sink);
     }
 }
 
 impl Section for NameSection {
     fn id(&self) -> u8 {
         SectionId::Custom.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let name_len = encoders::u32(4);
-        let n = name_len.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + 4 + self.bytes.len()).unwrap())
-                .chain(name_len)
-                .chain(b"name".iter().copied())
-                .chain(self.bytes.iter().copied()),
-        );
     }
 }
 
@@ -200,20 +194,20 @@ impl NameMap {
     /// named (e.g. `0 foo; 1 bar; 7 qux` is valid but `0 foo; 0 bar` is not).
     /// Names do not have to be unique (e.g. `0 foo; 1 foo; 2 foo` is valid).
     pub fn append(&mut self, idx: u32, name: &str) {
-        self.bytes.extend(encoders::u32(idx));
-        self.bytes
-            .extend(encoders::u32(u32::try_from(name.len()).unwrap()));
-        self.bytes.extend(name.as_bytes());
+        idx.encode(&mut self.bytes);
+        name.encode(&mut self.bytes);
         self.count += 1;
     }
 
     fn size(&self) -> usize {
-        encoders::u32(self.count).len() + self.bytes.len()
+        encoding_size(self.count) + self.bytes.len()
     }
+}
 
-    fn encode(&self, dst: &mut Vec<u8>) {
-        dst.extend(encoders::u32(self.count));
-        dst.extend(&self.bytes);
+impl Encode for NameMap {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.count.encode(sink);
+        sink.extend(&self.bytes);
     }
 }
 
@@ -242,17 +236,19 @@ impl IndirectNameMap {
     /// For example if this is describing local names then `idx` is a function
     /// index where the indexes within `names` are local indices.
     pub fn append(&mut self, idx: u32, names: &NameMap) {
-        self.bytes.extend(encoders::u32(idx));
+        idx.encode(&mut self.bytes);
         names.encode(&mut self.bytes);
         self.count += 1;
     }
 
     fn size(&self) -> usize {
-        encoders::u32(self.count).len() + self.bytes.len()
+        encoding_size(self.count) + self.bytes.len()
     }
+}
 
-    fn encode(&self, dst: &mut Vec<u8>) {
-        dst.extend(encoders::u32(self.count));
-        dst.extend(&self.bytes);
+impl Encode for IndirectNameMap {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        self.count.encode(sink);
+        sink.extend(&self.bytes);
     }
 }

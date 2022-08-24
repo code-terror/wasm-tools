@@ -5,13 +5,14 @@
 
 use crate::{arbitrary_loop, Config, DefaultConfig};
 use arbitrary::{Arbitrary, Result, Unstructured};
+use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::{
     collections::{HashMap, HashSet},
     marker,
     rc::Rc,
 };
-use wasm_encoder::{InterfaceTypeRef, PrimitiveInterfaceType, ValType};
+use wasm_encoder::{ComponentTypeRef, ComponentValType, PrimitiveValType, TypeBounds, ValType};
 
 mod encode;
 
@@ -82,6 +83,34 @@ struct ComponentBuilder {
     total_values: usize,
 }
 
+#[derive(Debug, Clone)]
+enum ComponentOrCoreFuncType {
+    Component(Rc<FuncType>),
+    Core(Rc<crate::core::FuncType>),
+}
+
+impl ComponentOrCoreFuncType {
+    fn as_core(&self) -> &Rc<crate::core::FuncType> {
+        match self {
+            ComponentOrCoreFuncType::Core(t) => t,
+            ComponentOrCoreFuncType::Component(_) => panic!("not a core func type"),
+        }
+    }
+
+    fn as_component(&self) -> &Rc<FuncType> {
+        match self {
+            ComponentOrCoreFuncType::Core(_) => panic!("not a component func type"),
+            ComponentOrCoreFuncType::Component(t) => t,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ComponentOrCoreInstanceType {
+    Component(Rc<InstanceType>),
+    Core(BTreeMap<String, crate::core::EntityType>),
+}
+
 /// Metadata (e.g. contents of various index spaces) we keep track of on a
 /// per-component basis.
 #[derive(Debug)]
@@ -96,34 +125,20 @@ struct ComponentContext {
     import_names: HashSet<String>,
 
     // This component's function index space.
-    //
-    // An indirect list of all functions in this component.
-    //
-    // Each entry is of the form `(i, j)` where `component.sections[i]` is
-    // guaranteed to be either
-    //
-    // * a `Section::Func` and we are referencing the `j`th function defined in
-    //   that section, which is guaranteed to be a core Wasm function, or
-    //
-    // * a `Section::Import` and we are referencing the `j`th import in that
-    //   section, which is guaranteed to be a function import.
-    funcs: Vec<(usize, usize)>,
+    funcs: Vec<ComponentOrCoreFuncType>,
 
-    // Which entries in `funcs` are interface functions?
-    interface_funcs: Vec<u32>,
+    // Which entries in `funcs` are component functions?
+    component_funcs: Vec<u32>,
 
-    // Which entries in `funcs` are interface functions that only use scalar
-    // interface types?
-    scalar_interface_funcs: Vec<u32>,
+    // Which entries in `component_funcs` are component functions that only use scalar
+    // types?
+    scalar_component_funcs: Vec<u32>,
 
     // Which entries in `funcs` are core Wasm functions?
     //
     // Note that a component can't import core functions, so these entries will
     // never point to a `Section::Import`.
     core_funcs: Vec<u32>,
-
-    // A map from a core function's index to its core function type.
-    core_func_types: HashMap<u32, Rc<crate::core::FuncType>>,
 
     // This component's component index space.
     //
@@ -137,7 +152,7 @@ struct ComponentContext {
     //   that section (in this case `j` must also be `0`, since a component
     //   section can only contain a single nested component), or
     //
-    // * a `Section::Import` and we are referenceing the `j`th import in that
+    // * a `Section::Import` and we are referencing the `j`th import in that
     //   section, which is guaranteed to be a component import.
     components: Vec<(usize, usize)>,
 
@@ -153,38 +168,15 @@ struct ComponentContext {
     //   section (in this case `j` must also be `0`, since a core section can
     //   only contain a single nested module), or
     //
-    // * a `Section::Import` and we are referenceing the `j`th import in that
+    // * a `Section::Import` and we are referencing the `j`th import in that
     //   section, which is guaranteed to be a module import.
     modules: Vec<(usize, usize)>,
 
     // This component's instance index space.
-    //
-    // An indirect list of all instances imported or instantiated inside this
-    // component.
-    //
-    // Each entry is of the form `(i, j)` where `component.sections[i]` is
-    // guaranteed to be either
-    //
-    // * a `Section::Instance` and we are referencing the `j`th instance
-    //   instantiated in that section, or
-    //
-    // * a `Section::Import` and we are referenceing the `j`th import in that
-    //   section, which is guaranteed to be an instance import.
-    instances: Vec<(usize, usize)>,
+    instances: Vec<ComponentOrCoreInstanceType>,
 
     // This component's value index space.
-    //
-    // An indirect list of all values inside this component.
-    //
-    // Each entry is of the form `(i, j)` where `component.sections[i]` is
-    // guaranteed to be either
-    //
-    // * a `Section::Start` and we are referencing the `j`th result of the start
-    //   function, or
-    //
-    // * a `Section::Import` and we are referenceing the `j`th import in that
-    //   section, which is guaranteed to be a value import.
-    values: Vec<(usize, usize)>,
+    values: Vec<ComponentValType>,
 }
 
 impl ComponentContext {
@@ -194,10 +186,9 @@ impl ComponentContext {
             num_imports: 0,
             import_names: HashSet::default(),
             funcs: vec![],
-            interface_funcs: vec![],
-            scalar_interface_funcs: vec![],
+            component_funcs: vec![],
+            scalar_component_funcs: vec![],
             core_funcs: vec![],
-            core_func_types: HashMap::default(),
             components: vec![],
             modules: vec![],
             instances: vec![],
@@ -228,21 +219,20 @@ impl ComponentContext {
 
 #[derive(Debug, Default)]
 struct TypesScope {
-    // All types in this index space, regardless of kind.
-    types: Vec<Rc<Type>>,
+    // All core types in this scope, regardless of kind.
+    core_types: Vec<Rc<CoreType>>,
 
-    // The indices of all the entries in `types` that describe things that can
-    // be imported or exported at instantiation time.
-    def_types: Vec<u32>,
+    // The indices of all the entries in `core_types` that are core function types.
+    core_func_types: Vec<u32>,
 
-    // The indices of all the entries in `types` that are module types.
+    // The indices of all the entries in `core_types` that are module types.
     module_types: Vec<u32>,
 
-    // The indices of all the entries in `types` that are component types.
-    component_types: Vec<u32>,
+    // All component types in this index space, regardless of kind.
+    types: Vec<Rc<Type>>,
 
-    // The indices of all the entries in `types` that are instance types.
-    instance_types: Vec<u32>,
+    // The indices of all the entries in `types` that are defined value types.
+    defined_types: Vec<u32>,
 
     // The indices of all the entries in `types` that are func types.
     func_types: Vec<u32>,
@@ -250,37 +240,45 @@ struct TypesScope {
     // A map from function types to their indices in the types space.
     func_type_to_indices: HashMap<Rc<FuncType>, Vec<u32>>,
 
-    // The indices of all the entries in `types` that are value types.
-    value_types: Vec<u32>,
+    // The indices of all the entries in `types` that are component types.
+    component_types: Vec<u32>,
 
-    // The indices of all the entries in `types` that are interface types.
-    interface_types: Vec<u32>,
+    // The indices of all the entries in `types` that are instance types.
+    instance_types: Vec<u32>,
 }
 
 impl TypesScope {
     fn push(&mut self, ty: Rc<Type>) -> u32 {
         let ty_idx = u32::try_from(self.types.len()).unwrap();
 
-        let (is_def_type, kind_list) = match &*ty {
-            Type::Module(_) => (true, &mut self.module_types),
-            Type::Component(_) => (true, &mut self.component_types),
-            Type::Instance(_) => (true, &mut self.instance_types),
+        let kind_list = match &*ty {
+            Type::Defined(_) => &mut self.defined_types,
             Type::Func(func_ty) => {
                 self.func_type_to_indices
                     .entry(func_ty.clone())
                     .or_default()
                     .push(ty_idx);
-                (true, &mut self.func_types)
+                &mut self.func_types
             }
-            Type::Value(_) => (true, &mut self.value_types),
-            Type::Interface(_) => (false, &mut self.interface_types),
+            Type::Component(_) => &mut self.component_types,
+            Type::Instance(_) => &mut self.instance_types,
         };
         kind_list.push(ty_idx);
-        if is_def_type {
-            self.def_types.push(ty_idx);
-        }
 
         self.types.push(ty);
+        ty_idx
+    }
+
+    fn push_core(&mut self, ty: Rc<CoreType>) -> u32 {
+        let ty_idx = u32::try_from(self.core_types.len()).unwrap();
+
+        let kind_list = match &*ty {
+            CoreType::Func(_) => &mut self.core_func_types,
+            CoreType::Module(_) => &mut self.module_types,
+        };
+        kind_list.push(ty_idx);
+
+        self.core_types.push(ty);
         ty_idx
     }
 
@@ -288,11 +286,20 @@ impl TypesScope {
         &self.types[index as usize]
     }
 
+    fn get_core(&self, index: u32) -> &Rc<CoreType> {
+        &self.core_types[index as usize]
+    }
+
     fn get_func(&self, index: u32) -> &Rc<FuncType> {
         match &**self.get(index) {
             Type::Func(f) => f,
             _ => panic!("get_func on non-function type"),
         }
+    }
+
+    fn can_ref_type(&self) -> bool {
+        // All component types and core module types may be referenced
+        !self.types.is_empty() || !self.module_types.is_empty()
     }
 }
 
@@ -343,7 +350,7 @@ impl Component {
     /// Construct a new `Component` using the given configuration.
     pub fn new(config: impl Config, u: &mut Unstructured) -> Result<Self> {
         let mut builder = ComponentBuilder::new(Rc::new(config));
-        Ok(builder.build(u)?)
+        builder.build(u)
     }
 
     fn empty() -> Self {
@@ -394,18 +401,19 @@ impl ComponentBuilder {
 
             // Only add any choice other than "finish what we've generated thus
             // far" when there is more arbitrary fuzzer data for us to consume.
-            if u.len() > 0 {
+            if !u.is_empty() {
                 choices.push(Self::arbitrary_custom_section);
 
                 // NB: we add each section as a choice even if we've already
                 // generated our maximum number of entities in that section so that
                 // we can exercise adding empty sections to the end of the module.
+                choices.push(Self::arbitrary_core_type_section);
                 choices.push(Self::arbitrary_type_section);
                 choices.push(Self::arbitrary_import_section);
-                choices.push(Self::arbitrary_func_section);
+                choices.push(Self::arbitrary_canonical_section);
 
                 if self.total_modules < self.config.max_modules() {
-                    choices.push(Self::arbitrary_core_section);
+                    choices.push(Self::arbitrary_core_module_section);
                 }
 
                 if self.components.len() < self.config.max_nesting_depth()
@@ -449,7 +457,7 @@ impl ComponentBuilder {
                 self.arbitrary_import_section(u)?.unwrap_still_building();
             }
             if self.component().funcs.len() < self.config.min_funcs() {
-                self.arbitrary_func_section(u)?.unwrap_still_building();
+                self.arbitrary_canonical_section(u)?.unwrap_still_building();
             }
         }
         self.fill_minimums = false;
@@ -514,6 +522,68 @@ impl ComponentBuilder {
         }
     }
 
+    fn push_core_type(&mut self, ty: Rc<CoreType>) -> u32 {
+        match self.ensure_section(
+            |s| matches!(s, Section::CoreType(_)),
+            || Section::CoreType(CoreTypeSection { types: vec![] }),
+        ) {
+            Section::CoreType(CoreTypeSection { types }) => {
+                types.push(ty.clone());
+                self.current_type_scope_mut().push_core(ty)
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn arbitrary_core_type_section(&mut self, u: &mut Unstructured) -> Result<Step> {
+        self.push_section(Section::CoreType(CoreTypeSection { types: vec![] }));
+
+        let min = if self.fill_minimums {
+            self.config
+                .min_types()
+                .saturating_sub(self.current_type_scope().types.len())
+        } else {
+            0
+        };
+
+        let max = self.config.max_types() - self.current_type_scope().types.len();
+
+        arbitrary_loop(u, min, max, |u| {
+            let mut type_fuel = self.config.max_type_size();
+            let ty = self.arbitrary_core_type(u, &mut type_fuel)?;
+            self.push_core_type(ty);
+            Ok(true)
+        })?;
+
+        Ok(Step::StillBuilding)
+    }
+
+    fn arbitrary_core_type(
+        &self,
+        u: &mut Unstructured,
+        type_fuel: &mut u32,
+    ) -> Result<Rc<CoreType>> {
+        *type_fuel = type_fuel.saturating_sub(1);
+        if *type_fuel == 0 {
+            return Ok(Rc::new(CoreType::Module(Rc::new(ModuleType::default()))));
+        }
+
+        let ty = match u.int_in_range::<u8>(0..=1)? {
+            0 => CoreType::Func(crate::core::arbitrary_func_type(
+                u,
+                &self.core_valtypes,
+                if self.config.multi_value_enabled() {
+                    None
+                } else {
+                    Some(1)
+                },
+            )?),
+            1 => CoreType::Module(self.arbitrary_module_type(u, type_fuel)?),
+            _ => unreachable!(),
+        };
+        Ok(Rc::new(ty))
+    }
+
     fn arbitrary_type_section(&mut self, u: &mut Unstructured) -> Result<Step> {
         self.push_section(Section::Type(TypeSection { types: vec![] }));
 
@@ -537,29 +607,109 @@ impl ComponentBuilder {
         Ok(Step::StillBuilding)
     }
 
+    fn arbitrary_type_ref<'a>(
+        &self,
+        u: &mut Unstructured<'a>,
+        for_import: bool,
+        for_type_def: bool,
+    ) -> Result<Option<ComponentTypeRef>> {
+        let mut choices: Vec<fn(&Self, &mut Unstructured) -> Result<ComponentTypeRef>> = Vec::new();
+        let scope = self.current_type_scope();
+
+        if !scope.module_types.is_empty()
+            && (for_type_def || !for_import || self.total_modules < self.config.max_modules())
+        {
+            choices.push(|me, u| {
+                Ok(ComponentTypeRef::Module(
+                    *u.choose(&me.current_type_scope().module_types)?,
+                ))
+            });
+        }
+
+        // Types cannot be imported currently
+        if !for_import
+            && !scope.types.is_empty()
+            && (for_type_def || scope.types.len() < self.config.max_types())
+        {
+            choices.push(|me, u| {
+                Ok(ComponentTypeRef::Type(
+                    TypeBounds::Eq,
+                    u.int_in_range(
+                        0..=u32::try_from(me.current_type_scope().types.len() - 1).unwrap(),
+                    )?,
+                ))
+            });
+        }
+
+        // TODO: wasm-smith needs to ensure that every arbitrary value gets used exactly once.
+        //       until that time, don't import values
+        // if for_type_def || !for_import || self.total_values < self.config.max_values() {
+        //     choices.push(|me, u| Ok(ComponentTypeRef::Value(me.arbitrary_component_val_type(u)?)));
+        // }
+
+        if !scope.func_types.is_empty()
+            && (for_type_def
+                || !for_import
+                || self.component().num_funcs() < self.config.max_funcs())
+        {
+            choices.push(|me, u| {
+                Ok(ComponentTypeRef::Func(
+                    *u.choose(&me.current_type_scope().func_types)?,
+                ))
+            });
+        }
+
+        if !scope.component_types.is_empty()
+            && (for_type_def || !for_import || self.total_components < self.config.max_components())
+        {
+            choices.push(|me, u| {
+                Ok(ComponentTypeRef::Component(
+                    *u.choose(&me.current_type_scope().component_types)?,
+                ))
+            });
+        }
+
+        if !scope.instance_types.is_empty()
+            && (for_type_def || !for_import || self.total_instances < self.config.max_instances())
+        {
+            choices.push(|me, u| {
+                Ok(ComponentTypeRef::Instance(
+                    *u.choose(&me.current_type_scope().instance_types)?,
+                ))
+            });
+        }
+
+        if choices.is_empty() {
+            return Ok(None);
+        }
+
+        let f = u.choose(&choices)?;
+        f(self, u).map(Option::Some)
+    }
+
     fn arbitrary_type(&mut self, u: &mut Unstructured, type_fuel: &mut u32) -> Result<Rc<Type>> {
         *type_fuel = type_fuel.saturating_sub(1);
         if *type_fuel == 0 {
-            return Ok(Rc::new(Type::Value(self.arbitrary_value_type(u)?)));
+            return Ok(Rc::new(Type::Defined(
+                self.arbitrary_defined_type(u, type_fuel)?,
+            )));
         }
 
-        let ty = match u.int_in_range::<u8>(0..=5)? {
-            0 => Type::Module(self.arbitrary_module_type(u, type_fuel)?),
-            1 => Type::Component(self.arbitrary_component_type(u, type_fuel)?),
-            2 => Type::Instance(self.arbitrary_instance_type(u, type_fuel)?),
-            3 => Type::Func(self.arbitrary_func_type(u, type_fuel)?),
-            4 => Type::Value(self.arbitrary_value_type(u)?),
-            5 => Type::Interface(self.arbitrary_interface_type(u, type_fuel)?),
+        let ty = match u.int_in_range::<u8>(0..=3)? {
+            0 => Type::Defined(self.arbitrary_defined_type(u, type_fuel)?),
+            1 => Type::Func(self.arbitrary_func_type(u, type_fuel)?),
+            2 => Type::Component(self.arbitrary_component_type(u, type_fuel)?),
+            3 => Type::Instance(self.arbitrary_instance_type(u, type_fuel)?),
             _ => unreachable!(),
         };
         Ok(Rc::new(ty))
     }
 
     fn arbitrary_module_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
-    ) -> Result<ModuleType> {
+    ) -> Result<Rc<ModuleType>> {
         let mut defs = vec![];
         let mut has_memory = false;
         let mut has_canonical_abi_realloc = false;
@@ -570,7 +720,7 @@ impl ComponentBuilder {
         let mut counts = EntityCounts::default();
 
         // Special case the canonical ABI functions since certain types can only
-        // be passed across the interface types boundary if they exist and
+        // be passed across the component boundary if they exist and
         // randomly generating them is extremely unlikely.
 
         // `memory`
@@ -631,7 +781,7 @@ impl ComponentBuilder {
 
         let mut entity_choices: Vec<
             fn(
-                &mut ComponentBuilder,
+                &ComponentBuilder,
                 &mut Unstructured,
                 &mut EntityCounts,
                 &[Rc<crate::core::FuncType>],
@@ -645,8 +795,19 @@ impl ComponentBuilder {
             }
 
             let max_choice = if types.len() < self.config.max_types() {
-                2
+                // Check if the parent scope has core function types to alias
+                if !types.is_empty()
+                    || (!self.types.is_empty()
+                        && !self.types.last().unwrap().core_func_types.is_empty())
+                {
+                    // Imports, exports, types, and aliases
+                    3
+                } else {
+                    // Imports, exports, and types
+                    2
+                }
             } else {
+                // Imports and exports
                 1
             };
 
@@ -666,8 +827,8 @@ impl ComponentBuilder {
                         Some(x) => x,
                     };
                     defs.push(ModuleTypeDef::Import(crate::core::Import {
-                        module: module.into(),
-                        field: field.into(),
+                        module,
+                        field,
                         entity_type,
                     }));
                 }
@@ -688,7 +849,7 @@ impl ComponentBuilder {
                 }
 
                 // Type definition.
-                _ => {
+                2 => {
                     let ty = crate::core::arbitrary_func_type(
                         u,
                         &self.core_valtypes,
@@ -701,26 +862,43 @@ impl ComponentBuilder {
                     types.push(ty.clone());
                     defs.push(ModuleTypeDef::TypeDef(crate::core::Type::Func(ty)));
                 }
+
+                // Alias
+                3 => {
+                    let alias = self.arbitrary_outer_core_type_alias(u, &types)?;
+                    let ty = match &alias {
+                        CoreAlias::InstanceExport { .. } => unreachable!(),
+                        CoreAlias::Outer {
+                            count,
+                            i,
+                            kind: CoreOuterAliasKind::Type(ty),
+                        } => ty,
+                    };
+                    types.push(ty.clone());
+                    defs.push(ModuleTypeDef::Alias(alias));
+                }
+
+                _ => unreachable!(),
             }
 
             Ok(true)
         })?;
 
-        Ok(ModuleType {
+        Ok(Rc::new(ModuleType {
             defs,
             has_memory,
             has_canonical_abi_realloc,
             has_canonical_abi_free,
-        })
+        }))
     }
 
     fn arbitrary_core_entity_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         types: &[Rc<crate::core::FuncType>],
         choices: &mut Vec<
             fn(
-                &mut ComponentBuilder,
+                &ComponentBuilder,
                 &mut Unstructured,
                 &mut EntityCounts,
                 &[Rc<crate::core::FuncType>],
@@ -790,7 +968,7 @@ impl ComponentBuilder {
             return Ok(None);
         }
 
-        let f = u.choose(&choices)?;
+        let f = u.choose(choices)?;
         let ty = f(self, u, counts, types)?;
         Ok(Some(ty))
     }
@@ -799,27 +977,18 @@ impl ComponentBuilder {
         Ok(*u.choose(&self.core_valtypes)?)
     }
 
-    fn arbitrary_core_global_type(
-        &mut self,
-        u: &mut Unstructured,
-    ) -> Result<crate::core::GlobalType> {
+    fn arbitrary_core_global_type(&self, u: &mut Unstructured) -> Result<crate::core::GlobalType> {
         Ok(crate::core::GlobalType {
             val_type: self.arbitrary_core_valtype(u)?,
             mutable: u.arbitrary()?,
         })
     }
 
-    fn arbitrary_core_table_type(
-        &mut self,
-        u: &mut Unstructured,
-    ) -> Result<crate::core::TableType> {
+    fn arbitrary_core_table_type(&self, u: &mut Unstructured) -> Result<crate::core::TableType> {
         crate::core::arbitrary_table_type(u, self.config())
     }
 
-    fn arbitrary_core_memory_type(
-        &mut self,
-        u: &mut Unstructured,
-    ) -> Result<crate::core::MemoryType> {
+    fn arbitrary_core_memory_type(&self, u: &mut Unstructured) -> Result<crate::core::MemoryType> {
         crate::core::arbitrary_memtype(u, self.config())
     }
 
@@ -850,7 +1019,7 @@ impl ComponentBuilder {
         &mut self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
-    ) -> Result<ComponentType> {
+    ) -> Result<Rc<ComponentType>> {
         let mut defs = vec![];
         let mut imports = HashSet::new();
         let mut exports = HashSet::new();
@@ -862,33 +1031,32 @@ impl ComponentBuilder {
                     return Ok(false);
                 }
 
-                if !me.current_type_scope().def_types.is_empty()
-                    && u.int_in_range::<u8>(0..=3)? == 0
-                {
-                    // Imports.
-                    let name = crate::unique_string(100, &mut imports, u)?;
-                    let max_def_ty_idx = me.current_type_scope().def_types.len() - 1;
-                    let def_ty_idx = u.int_in_range(0..=max_def_ty_idx)?;
-                    let ty = me.current_type_scope().def_types[def_ty_idx];
-                    let ty = u32::try_from(ty).unwrap();
-                    defs.push(ComponentTypeDef::Import(Import { name, ty }));
-                } else {
-                    // Type definitions, exports, and aliases.
-                    let def = me.arbitrary_instance_type_def(u, &mut exports, type_fuel)?;
-                    defs.push(def.into());
+                if me.current_type_scope().can_ref_type() && u.int_in_range::<u8>(0..=3)? == 0 {
+                    if let Some(ty) = me.arbitrary_type_ref(u, true, true)? {
+                        // Imports.
+                        let name = crate::unique_string(100, &mut imports, u)?;
+                        defs.push(ComponentTypeDef::Import(Import { name, ty }));
+                        return Ok(true);
+                    }
+
+                    // Can't reference an arbitrary type, fallback to another definition.
                 }
+
+                // Type definitions, exports, and aliases.
+                let def = me.arbitrary_instance_type_def(u, &mut exports, type_fuel)?;
+                defs.push(def.into());
                 Ok(true)
             })
         })?;
 
-        Ok(ComponentType { defs })
+        Ok(Rc::new(ComponentType { defs }))
     }
 
     fn arbitrary_instance_type(
         &mut self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
-    ) -> Result<InstanceType> {
+    ) -> Result<Rc<InstanceType>> {
         let mut defs = vec![];
         let mut exports = HashSet::new();
 
@@ -904,7 +1072,7 @@ impl ComponentBuilder {
             })
         })?;
 
-        Ok(InstanceType { defs })
+        Ok(Rc::new(InstanceType { defs }))
     }
 
     fn arbitrary_instance_type_def(
@@ -923,34 +1091,44 @@ impl ComponentBuilder {
         > = Vec::with_capacity(3);
 
         // Export.
-        if !self.current_type_scope().types.is_empty() {
+        if self.current_type_scope().can_ref_type() {
             choices.push(|me, exports, u, _type_fuel| {
                 Ok(InstanceTypeDef::Export {
                     name: crate::unique_string(100, exports, u)?,
-                    ty: u.int_in_range(
-                        0..=u32::try_from(me.current_type_scope().types.len()).unwrap() - 1,
-                    )?,
+                    ty: me.arbitrary_type_ref(u, false, true)?.unwrap(),
                 })
             });
         }
 
         // Outer type alias.
-        if self.types.iter().any(|scope| !scope.types.is_empty()) {
+        if self
+            .types
+            .iter()
+            .any(|scope| !scope.types.is_empty() || !scope.core_types.is_empty())
+        {
             choices.push(|me, _exports, u, _type_fuel| {
                 let alias = me.arbitrary_outer_type_alias(u)?;
-                let (count, i) = match alias {
+                match &alias {
                     Alias::Outer {
-                        count,
-                        i,
-                        kind: OuterAliasKind::Type,
-                    } => (count, i),
+                        kind: OuterAliasKind::Type(ty),
+                        ..
+                    } => me.current_type_scope_mut().push(ty.clone()),
+                    Alias::Outer {
+                        kind: OuterAliasKind::CoreType(ty),
+                        ..
+                    } => me.current_type_scope_mut().push_core(ty.clone()),
                     _ => unreachable!(),
                 };
-                let ty = me.outer_type(count, i).clone();
-                me.current_type_scope_mut().push(ty);
                 Ok(InstanceTypeDef::Alias(alias))
             });
         }
+
+        // Core type definition.
+        choices.push(|me, _exports, u, type_fuel| {
+            let ty = me.arbitrary_core_type(u, type_fuel)?;
+            me.current_type_scope_mut().push_core(ty.clone());
+            Ok(InstanceTypeDef::CoreType(ty))
+        });
 
         // Type definition.
         choices.push(|me, _exports, u, type_fuel| {
@@ -963,13 +1141,53 @@ impl ComponentBuilder {
         f(self, exports, u, type_fuel)
     }
 
-    fn arbitrary_outer_type_alias(&mut self, u: &mut Unstructured) -> Result<Alias> {
+    fn arbitrary_outer_core_type_alias(
+        &self,
+        u: &mut Unstructured,
+        local_types: &[Rc<crate::core::FuncType>],
+    ) -> Result<CoreAlias> {
+        let enclosing_type_len = if !self.types.is_empty() {
+            self.types.last().unwrap().core_func_types.len()
+        } else {
+            0
+        };
+
+        assert!(!local_types.is_empty() || enclosing_type_len > 0);
+
+        let max = enclosing_type_len + local_types.len() - 1;
+        let i = u.int_in_range(0..=max)?;
+        let (count, index, ty) = if i < enclosing_type_len {
+            let enclosing = self.types.last().unwrap();
+            let index = enclosing.core_func_types[i];
+            (
+                1,
+                index,
+                match enclosing.get_core(index).as_ref() {
+                    CoreType::Func(ty) => ty.clone(),
+                    CoreType::Module(_) => unreachable!(),
+                },
+            )
+        } else if i - enclosing_type_len < local_types.len() {
+            let i = i - enclosing_type_len;
+            (0, u32::try_from(i).unwrap(), local_types[i].clone())
+        } else {
+            unreachable!()
+        };
+
+        Ok(CoreAlias::Outer {
+            count,
+            i: index,
+            kind: CoreOuterAliasKind::Type(ty),
+        })
+    }
+
+    fn arbitrary_outer_type_alias(&self, u: &mut Unstructured) -> Result<Alias> {
         let non_empty_types_scopes: Vec<_> = self
             .types
             .iter()
             .rev()
             .enumerate()
-            .filter(|(_, scope)| !scope.types.is_empty())
+            .filter(|(_, scope)| !scope.types.is_empty() || !scope.core_types.is_empty())
             .collect();
         assert!(
             !non_empty_types_scopes.is_empty(),
@@ -978,26 +1196,42 @@ impl ComponentBuilder {
 
         let (count, scope) = u.choose(&non_empty_types_scopes)?;
         let count = u32::try_from(*count).unwrap();
-        assert!(!scope.types.is_empty());
+        assert!(!scope.types.is_empty() || !scope.core_types.is_empty());
 
-        let max_type_in_scope = u32::try_from(scope.types.len() - 1).unwrap();
+        let max_type_in_scope = scope.types.len() + scope.core_types.len() - 1;
         let i = u.int_in_range(0..=max_type_in_scope)?;
 
-        Ok(Alias::Outer {
-            count,
-            i,
-            kind: OuterAliasKind::Type,
-        })
+        let (i, kind) = if i < scope.types.len() {
+            let i = u32::try_from(i).unwrap();
+            (i, OuterAliasKind::Type(Rc::clone(scope.get(i))))
+        } else if i - scope.types.len() < scope.core_types.len() {
+            let i = u32::try_from(i - scope.types.len()).unwrap();
+            (i, OuterAliasKind::CoreType(Rc::clone(scope.get_core(i))))
+        } else {
+            unreachable!()
+        };
+
+        Ok(Alias::Outer { count, i, kind })
     }
 
     fn arbitrary_func_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
     ) -> Result<Rc<FuncType>> {
         let mut params = vec![];
         let mut param_names = HashSet::new();
-        arbitrary_loop(u, 0, 20, |u| {
+
+        // Note: parameters are currently limited to a maximum of 16
+        // because any additional parameters will require indirect access
+        // via a pointer argument; when this occurs, validation of any
+        // lowered function will fail because it will be missing a
+        // memory option (not yet implemented).
+        //
+        // When options are correctly specified on canonical functions,
+        // we should increase this maximum to test indirect parameter
+        // passing.
+        arbitrary_loop(u, 0, 16, |u| {
             *type_fuel = type_fuel.saturating_sub(1);
             if *type_fuel == 0 {
                 return Ok(false);
@@ -1007,67 +1241,62 @@ impl ComponentBuilder {
             Ok(true)
         })?;
 
-        let result = self.arbitrary_interface_type_ref(u)?;
+        let result = self.arbitrary_component_val_type(u)?;
 
         Ok(Rc::new(FuncType { params, result }))
     }
 
-    fn arbitrary_value_type(&mut self, u: &mut Unstructured) -> Result<ValueType> {
-        Ok(ValueType(self.arbitrary_interface_type_ref(u)?))
-    }
-
-    fn arbitrary_interface_type_ref(&mut self, u: &mut Unstructured) -> Result<InterfaceTypeRef> {
-        let max_choices = if self.current_type_scope().interface_types.is_empty() {
+    fn arbitrary_component_val_type(&self, u: &mut Unstructured) -> Result<ComponentValType> {
+        let max_choices = if self.current_type_scope().defined_types.is_empty() {
             0
         } else {
             1
         };
         match u.int_in_range(0..=max_choices)? {
-            0 => Ok(InterfaceTypeRef::Primitive(
-                self.arbitrary_primitive_interface_type(u)?,
+            0 => Ok(ComponentValType::Primitive(
+                self.arbitrary_primitive_val_type(u)?,
             )),
-            1 => Ok(InterfaceTypeRef::Type(
-                *u.choose(&self.current_type_scope().interface_types)?,
-            )),
+            1 => {
+                let index = *u.choose(&self.current_type_scope().defined_types)?;
+                let ty = Rc::clone(self.current_type_scope().get(index));
+                Ok(ComponentValType::Type(index))
+            }
             _ => unreachable!(),
         }
     }
 
-    fn arbitrary_primitive_interface_type(
-        &mut self,
-        u: &mut Unstructured,
-    ) -> Result<PrimitiveInterfaceType> {
+    fn arbitrary_primitive_val_type(&self, u: &mut Unstructured) -> Result<PrimitiveValType> {
         match u.int_in_range(0..=13)? {
-            0 => Ok(PrimitiveInterfaceType::Unit),
-            1 => Ok(PrimitiveInterfaceType::Bool),
-            2 => Ok(PrimitiveInterfaceType::S8),
-            3 => Ok(PrimitiveInterfaceType::U8),
-            4 => Ok(PrimitiveInterfaceType::S16),
-            5 => Ok(PrimitiveInterfaceType::U16),
-            6 => Ok(PrimitiveInterfaceType::S32),
-            7 => Ok(PrimitiveInterfaceType::U32),
-            8 => Ok(PrimitiveInterfaceType::S64),
-            9 => Ok(PrimitiveInterfaceType::U64),
-            10 => Ok(PrimitiveInterfaceType::Float32),
-            11 => Ok(PrimitiveInterfaceType::Float64),
-            12 => Ok(PrimitiveInterfaceType::Char),
-            13 => Ok(PrimitiveInterfaceType::String),
+            0 => Ok(PrimitiveValType::Unit),
+            1 => Ok(PrimitiveValType::Bool),
+            2 => Ok(PrimitiveValType::S8),
+            3 => Ok(PrimitiveValType::U8),
+            4 => Ok(PrimitiveValType::S16),
+            5 => Ok(PrimitiveValType::U16),
+            6 => Ok(PrimitiveValType::S32),
+            7 => Ok(PrimitiveValType::U32),
+            8 => Ok(PrimitiveValType::S64),
+            9 => Ok(PrimitiveValType::U64),
+            10 => Ok(PrimitiveValType::Float32),
+            11 => Ok(PrimitiveValType::Float64),
+            12 => Ok(PrimitiveValType::Char),
+            13 => Ok(PrimitiveValType::String),
             _ => unreachable!(),
         }
     }
 
     fn arbitrary_named_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         names: &mut HashSet<String>,
     ) -> Result<NamedType> {
         let name = crate::unique_non_empty_string(100, names, u)?;
-        let ty = self.arbitrary_interface_type_ref(u)?;
+        let ty = self.arbitrary_component_val_type(u)?;
         Ok(NamedType { name, ty })
     }
 
     fn arbitrary_optional_named_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         names: &mut HashSet<String>,
     ) -> Result<OptionalNamedType> {
@@ -1076,12 +1305,12 @@ impl ComponentBuilder {
         } else {
             None
         };
-        let ty = self.arbitrary_interface_type_ref(u)?;
+        let ty = self.arbitrary_component_val_type(u)?;
         Ok(OptionalNamedType { name, ty })
     }
 
     fn arbitrary_record_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
     ) -> Result<RecordType> {
@@ -1100,13 +1329,13 @@ impl ComponentBuilder {
     }
 
     fn arbitrary_variant_type(
-        &mut self,
+        &self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
     ) -> Result<VariantType> {
         let mut cases = vec![];
         let mut case_names = HashSet::new();
-        arbitrary_loop(u, 0, 100, |u| {
+        arbitrary_loop(u, 1, 100, |u| {
             *type_fuel = type_fuel.saturating_sub(1);
             if *type_fuel == 0 {
                 return Ok(false);
@@ -1126,17 +1355,13 @@ impl ComponentBuilder {
         Ok(VariantType { cases })
     }
 
-    fn arbitrary_list_type(&mut self, u: &mut Unstructured) -> Result<ListType> {
+    fn arbitrary_list_type(&self, u: &mut Unstructured) -> Result<ListType> {
         Ok(ListType {
-            elem_ty: self.arbitrary_interface_type_ref(u)?,
+            elem_ty: self.arbitrary_component_val_type(u)?,
         })
     }
 
-    fn arbitrary_tuple_type(
-        &mut self,
-        u: &mut Unstructured,
-        type_fuel: &mut u32,
-    ) -> Result<TupleType> {
+    fn arbitrary_tuple_type(&self, u: &mut Unstructured, type_fuel: &mut u32) -> Result<TupleType> {
         let mut fields = vec![];
         arbitrary_loop(u, 0, 100, |u| {
             *type_fuel = type_fuel.saturating_sub(1);
@@ -1144,17 +1369,13 @@ impl ComponentBuilder {
                 return Ok(false);
             }
 
-            fields.push(self.arbitrary_interface_type_ref(u)?);
+            fields.push(self.arbitrary_component_val_type(u)?);
             Ok(true)
         })?;
         Ok(TupleType { fields })
     }
 
-    fn arbitrary_flags_type(
-        &mut self,
-        u: &mut Unstructured,
-        type_fuel: &mut u32,
-    ) -> Result<FlagsType> {
+    fn arbitrary_flags_type(&self, u: &mut Unstructured, type_fuel: &mut u32) -> Result<FlagsType> {
         let mut fields = vec![];
         let mut field_names = HashSet::new();
         arbitrary_loop(u, 0, 100, |u| {
@@ -1169,14 +1390,10 @@ impl ComponentBuilder {
         Ok(FlagsType { fields })
     }
 
-    fn arbitrary_enum_type(
-        &mut self,
-        u: &mut Unstructured,
-        type_fuel: &mut u32,
-    ) -> Result<EnumType> {
+    fn arbitrary_enum_type(&self, u: &mut Unstructured, type_fuel: &mut u32) -> Result<EnumType> {
         let mut variants = vec![];
         let mut variant_names = HashSet::new();
-        arbitrary_loop(u, 0, 100, |u| {
+        arbitrary_loop(u, 1, 100, |u| {
             *type_fuel = type_fuel.saturating_sub(1);
             if *type_fuel == 0 {
                 return Ok(false);
@@ -1188,70 +1405,60 @@ impl ComponentBuilder {
         Ok(EnumType { variants })
     }
 
-    fn arbitrary_union_type(
-        &mut self,
-        u: &mut Unstructured,
-        type_fuel: &mut u32,
-    ) -> Result<UnionType> {
+    fn arbitrary_union_type(&self, u: &mut Unstructured, type_fuel: &mut u32) -> Result<UnionType> {
         let mut variants = vec![];
-        arbitrary_loop(u, 0, 100, |u| {
+        arbitrary_loop(u, 1, 100, |u| {
             *type_fuel = type_fuel.saturating_sub(1);
             if *type_fuel == 0 {
                 return Ok(false);
             }
 
-            variants.push(self.arbitrary_interface_type_ref(u)?);
+            variants.push(self.arbitrary_component_val_type(u)?);
             Ok(true)
         })?;
         Ok(UnionType { variants })
     }
 
-    fn arbitrary_option_type(&mut self, u: &mut Unstructured) -> Result<OptionType> {
+    fn arbitrary_option_type(&self, u: &mut Unstructured) -> Result<OptionType> {
         Ok(OptionType {
-            inner_ty: self.arbitrary_interface_type_ref(u)?,
+            inner_ty: self.arbitrary_component_val_type(u)?,
         })
     }
 
-    fn arbitrary_expected_type(&mut self, u: &mut Unstructured) -> Result<ExpectedType> {
+    fn arbitrary_expected_type(&self, u: &mut Unstructured) -> Result<ExpectedType> {
         Ok(ExpectedType {
-            ok_ty: self.arbitrary_interface_type_ref(u)?,
-            err_ty: self.arbitrary_interface_type_ref(u)?,
+            ok_ty: self.arbitrary_component_val_type(u)?,
+            err_ty: self.arbitrary_component_val_type(u)?,
         })
     }
 
-    fn arbitrary_interface_type(
-        &mut self,
+    fn arbitrary_defined_type(
+        &self,
         u: &mut Unstructured,
         type_fuel: &mut u32,
-    ) -> Result<InterfaceType> {
+    ) -> Result<DefinedType> {
         match u.int_in_range(0..=9)? {
-            0 => Ok(InterfaceType::Primitive(
-                self.arbitrary_primitive_interface_type(u)?,
+            0 => Ok(DefinedType::Primitive(
+                self.arbitrary_primitive_val_type(u)?,
             )),
-            1 => Ok(InterfaceType::Record(
+            1 => Ok(DefinedType::Record(
                 self.arbitrary_record_type(u, type_fuel)?,
             )),
-            2 => Ok(InterfaceType::Variant(
+            2 => Ok(DefinedType::Variant(
                 self.arbitrary_variant_type(u, type_fuel)?,
             )),
-            3 => Ok(InterfaceType::List(self.arbitrary_list_type(u)?)),
-            4 => Ok(InterfaceType::Tuple(
-                self.arbitrary_tuple_type(u, type_fuel)?,
-            )),
-            5 => Ok(InterfaceType::Flags(
-                self.arbitrary_flags_type(u, type_fuel)?,
-            )),
-            6 => Ok(InterfaceType::Enum(self.arbitrary_enum_type(u, type_fuel)?)),
-            7 => Ok(InterfaceType::Union(
-                self.arbitrary_union_type(u, type_fuel)?,
-            )),
-            8 => Ok(InterfaceType::Option(self.arbitrary_option_type(u)?)),
-            9 => Ok(InterfaceType::Expected(self.arbitrary_expected_type(u)?)),
+            3 => Ok(DefinedType::List(self.arbitrary_list_type(u)?)),
+            4 => Ok(DefinedType::Tuple(self.arbitrary_tuple_type(u, type_fuel)?)),
+            5 => Ok(DefinedType::Flags(self.arbitrary_flags_type(u, type_fuel)?)),
+            6 => Ok(DefinedType::Enum(self.arbitrary_enum_type(u, type_fuel)?)),
+            7 => Ok(DefinedType::Union(self.arbitrary_union_type(u, type_fuel)?)),
+            8 => Ok(DefinedType::Option(self.arbitrary_option_type(u)?)),
+            9 => Ok(DefinedType::Expected(self.arbitrary_expected_type(u)?)),
             _ => unreachable!(),
         }
     }
 
-    fn push_import(&mut self, name: String, ty: u32) {
+    fn push_import(&mut self, name: String, ty: ComponentTypeRef) {
         let nth = match self.ensure_section(
             |sec| matches!(sec, Section::Import(_)),
             || Section::Import(ImportSection { imports: vec![] }),
@@ -1264,83 +1471,102 @@ impl ComponentBuilder {
         };
         let section_index = self.component().component.sections.len() - 1;
 
-        match &*self.current_type_scope().get(ty).clone() {
-            Type::Func(func_ty) => {
-                let func_index = u32::try_from(self.component().funcs.len()).unwrap();
-                self.component_mut().funcs.push((section_index, nth));
-
-                self.component_mut().interface_funcs.push(func_index);
-                if func_ty.is_scalar() {
-                    self.component_mut().scalar_interface_funcs.push(func_index);
-                }
-            }
-
-            Type::Module(_) => {
+        match ty {
+            ComponentTypeRef::Module(_) => {
                 self.total_modules += 1;
                 self.component_mut().modules.push((section_index, nth));
             }
-            Type::Component(_) => {
+            ComponentTypeRef::Func(ty_index) => {
+                let func_ty = match self.current_type_scope().get(ty_index).as_ref() {
+                    Type::Func(ty) => ty.clone(),
+                    _ => unreachable!(),
+                };
+
+                if func_ty.is_scalar() {
+                    let func_index = u32::try_from(self.component().component_funcs.len()).unwrap();
+                    self.component_mut().scalar_component_funcs.push(func_index);
+                }
+
+                let func_index = u32::try_from(self.component().funcs.len()).unwrap();
+                self.component_mut()
+                    .funcs
+                    .push(ComponentOrCoreFuncType::Component(func_ty));
+
+                self.component_mut().component_funcs.push(func_index);
+            }
+            ComponentTypeRef::Value(ty) => {
+                self.total_values += 1;
+                self.component_mut().values.push(ty);
+            }
+            ComponentTypeRef::Type(TypeBounds::Eq, ty_index) => {
+                let ty = self.current_type_scope().get(ty_index).clone();
+                self.current_type_scope_mut().push(ty);
+            }
+            ComponentTypeRef::Instance(ty_index) => {
+                let instance_ty = match self.current_type_scope().get(ty_index).as_ref() {
+                    Type::Instance(ty) => ty.clone(),
+                    _ => unreachable!(),
+                };
+
+                self.total_instances += 1;
+                self.component_mut()
+                    .instances
+                    .push(ComponentOrCoreInstanceType::Component(instance_ty));
+            }
+            ComponentTypeRef::Component(_) => {
                 self.total_components += 1;
                 self.component_mut().components.push((section_index, nth));
             }
-            Type::Instance(_) => {
-                self.total_instances += 1;
-                self.component_mut().instances.push((section_index, nth));
-            }
-            Type::Value(_) => {
-                self.total_values += 1;
-                self.component_mut().values.push((section_index, nth));
-            }
-            Type::Interface(_) => unreachable!("cannot import interface types"),
         }
     }
 
-    fn interface_function_type(&self, inter_func: u32) -> &Rc<FuncType> {
-        let (section_index, nth) = self.component().funcs[inter_func as usize];
-        let inter_func_ty = match &self.component().component.sections[section_index] {
-            Section::Import(ImportSection { imports }) => imports[nth].ty,
-            Section::Func(FuncSection { funcs }) => match &funcs[nth] {
-                Func::CanonLift { func_ty, .. } => *func_ty,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
-        self.current_type_scope().get_func(inter_func_ty)
+    fn core_function_type(&self, core_func_index: u32) -> &Rc<crate::core::FuncType> {
+        self.component().funcs[self.component().core_funcs[core_func_index as usize] as usize]
+            .as_core()
+    }
+
+    fn component_function_type(&self, func_index: u32) -> &Rc<FuncType> {
+        self.component().funcs[self.component().component_funcs[func_index as usize] as usize]
+            .as_component()
     }
 
     fn push_func(&mut self, func: Func) {
         let nth = match self.component_mut().component.sections.last_mut() {
-            Some(Section::Func(FuncSection { funcs })) => funcs.len(),
+            Some(Section::Canonical(CanonicalSection { funcs })) => funcs.len(),
             _ => {
-                self.push_section(Section::Func(FuncSection { funcs: vec![] }));
+                self.push_section(Section::Canonical(CanonicalSection { funcs: vec![] }));
                 0
             }
         };
         let section_index = self.component().component.sections.len() - 1;
 
         let func_index = u32::try_from(self.component().funcs.len()).unwrap();
-        self.component_mut().funcs.push((section_index, nth));
 
-        match &func {
+        let ty = match &func {
             Func::CanonLift { func_ty, .. } => {
-                self.component_mut().interface_funcs.push(func_index);
-                if self.current_type_scope().get_func(*func_ty).is_scalar() {
-                    let interface_func_index = self.component().interface_funcs.len();
-                    self.component_mut().scalar_interface_funcs.push(func_index);
+                let ty = Rc::clone(self.current_type_scope().get_func(*func_ty));
+                if ty.is_scalar() {
+                    let func_index = u32::try_from(self.component().component_funcs.len()).unwrap();
+                    self.component_mut().scalar_component_funcs.push(func_index);
                 }
+                self.component_mut().component_funcs.push(func_index);
+                ComponentOrCoreFuncType::Component(ty)
             }
-            Func::CanonLower { inter_func, .. } => {
-                let inter_func_ty = self.interface_function_type(*inter_func);
-                let core_func_ty = canonical_abi_for(inter_func_ty);
+            Func::CanonLower {
+                func_index: comp_func_index,
+                ..
+            } => {
+                let comp_func_ty = self.component_function_type(*comp_func_index);
+                let core_func_ty = canonical_abi_for(comp_func_ty);
                 self.component_mut().core_funcs.push(func_index);
-                self.component_mut()
-                    .core_func_types
-                    .insert(func_index, core_func_ty);
+                ComponentOrCoreFuncType::Core(core_func_ty)
             }
-        }
+        };
+
+        self.component_mut().funcs.push(ty);
 
         match self.component_mut().component.sections.last_mut() {
-            Some(Section::Func(FuncSection { funcs })) => funcs.push(func),
+            Some(Section::Canonical(CanonicalSection { funcs })) => funcs.push(func),
             _ => unreachable!(),
         }
     }
@@ -1359,59 +1585,23 @@ impl ComponentBuilder {
         };
         let max = self.config.max_imports() - self.component().num_imports;
 
-        if !self.current_type_scope().def_types.is_empty() {
-            crate::arbitrary_loop(u, min, max, |u| {
-                let name = crate::unique_string(100, &mut self.component_mut().import_names, u)?;
-
-                let mut choices: Vec<fn(&mut Unstructured, &mut ComponentBuilder) -> Result<u32>> =
-                    vec![];
-
-                if !self.current_type_scope().module_types.is_empty()
-                    && self.total_modules < self.config.max_modules()
-                {
-                    choices.push(|u, c| u.choose(&c.current_type_scope().module_types).copied());
+        crate::arbitrary_loop(u, min, max, |u| {
+            match self.arbitrary_type_ref(u, true, false)? {
+                Some(ty) => {
+                    let name =
+                        crate::unique_string(100, &mut self.component_mut().import_names, u)?;
+                    self.push_import(name, ty);
+                    Ok(true)
                 }
-
-                if !self.current_type_scope().component_types.is_empty()
-                    && self.total_components < self.config.max_components()
-                {
-                    choices.push(|u, c| u.choose(&c.current_type_scope().component_types).copied());
-                }
-
-                if !self.current_type_scope().instance_types.is_empty()
-                    && self.total_instances < self.config.max_instances()
-                {
-                    choices.push(|u, c| u.choose(&c.current_type_scope().instance_types).copied());
-                }
-
-                if !self.current_type_scope().func_types.is_empty()
-                    && self.component().num_funcs() < self.config.max_funcs()
-                {
-                    choices.push(|u, c| u.choose(&c.current_type_scope().func_types).copied());
-                }
-
-                if !self.current_type_scope().value_types.is_empty()
-                    && self.total_values < self.config.max_values()
-                {
-                    choices.push(|u, c| u.choose(&c.current_type_scope().value_types).copied());
-                }
-
-                if choices.is_empty() {
-                    return Ok(false);
-                }
-
-                let f = u.choose(&choices)?;
-                let ty = f(u, self)?;
-                self.push_import(name, ty);
-                Ok(true)
-            })?;
-        }
+                None => Ok(false),
+            }
+        })?;
 
         Ok(Step::StillBuilding)
     }
 
-    fn arbitrary_func_section(&mut self, u: &mut Unstructured) -> Result<Step> {
-        self.push_section(Section::Func(FuncSection { funcs: vec![] }));
+    fn arbitrary_canonical_section(&mut self, u: &mut Unstructured) -> Result<Step> {
+        self.push_section(Section::Canonical(CanonicalSection { funcs: vec![] }));
 
         let min = if self.fill_minimums {
             self.config
@@ -1430,60 +1620,62 @@ impl ComponentBuilder {
         crate::arbitrary_loop(u, min, max, |u| {
             choices.clear();
 
-            // NB: We only lift/lower scalar interface functions.
+            // NB: We only lift/lower scalar component functions.
             //
-            // If we generated lifting and lowering of compound interface types,
+            // If we generated lifting and lowering of compound value types,
             // the probability of generating a corresponding Wasm module that
-            // generates valid instances of the compound interface types would
+            // generates valid instances of the compound value types would
             // be vanishingly tiny (e.g. for `list<string>` we would have to
             // generate a core Wasm module that correctly produces a pointer and
             // length for a memory region that itself is a series of pointers
             // and lengths of valid strings, as well as `canonical_abi_realloc`
             // and `canonical_abi_free` functions that do the right thing).
             //
-            // This is a pretty serious limitation of `wasm-smith`'s interface
+            // This is a pretty serious limitation of `wasm-smith`'s component
             // types support, but it is one we are intentionally
             // accepting. `wasm-smith` will focus on generating arbitrary
             // component sections, structures, and import/export topologies; not
-            // interface functions and core Wasm implementations of interface
+            // component functions and core Wasm implementations of component
             // functions. In the future, we intend to build a new, distinct test
-            // case generator specifically for exercising interface functions
+            // case generator specifically for exercising component functions
             // and the canonical ABI. This new generator won't emit arbitrary
             // component sections, structures, or import/export topologies, and
             // will instead leave that to `wasm-smith`.
 
-            if !self.component().scalar_interface_funcs.is_empty() {
+            if !self.component().scalar_component_funcs.is_empty() {
                 choices.push(|u, c| {
-                    let inter_func = *u.choose(&c.component().scalar_interface_funcs)?;
+                    let func_index = *u.choose(&c.component().scalar_component_funcs)?;
                     Ok(Some(Func::CanonLower {
-                        // Scalar interface functions don't use any canonical options.
+                        // Scalar component functions don't use any canonical options.
                         options: vec![],
-                        inter_func,
+                        func_index,
                     }))
                 });
             }
 
             if !self.component().core_funcs.is_empty() {
                 choices.push(|u, c| {
-                    let core_func = *u.choose(&c.component().core_funcs)?;
-                    let core_func_ty = c.component().core_func_types.get(&core_func).unwrap();
-                    let inter_func_ty = inverse_scalar_canonical_abi_for(u, core_func_ty)?;
+                    let core_func_index = u.int_in_range(
+                        0..=u32::try_from(c.component().core_funcs.len() - 1).unwrap(),
+                    )?;
+                    let core_func_ty = c.core_function_type(core_func_index);
+                    let comp_func_ty = inverse_scalar_canonical_abi_for(u, core_func_ty)?;
 
                     let func_ty = if let Some(indices) = c
                         .current_type_scope()
                         .func_type_to_indices
-                        .get(&inter_func_ty)
+                        .get(&comp_func_ty)
                     {
-                        // If we've already defined this interface function type
+                        // If we've already defined this component function type
                         // one or more times, then choose one of those
                         // definitions arbitrarily.
                         debug_assert!(!indices.is_empty());
                         *u.choose(indices)?
                     } else if c.current_type_scope().types.len() < c.config.max_types() {
-                        // If we haven't already defined this interface function
+                        // If we haven't already defined this component function
                         // type, and we haven't defined the configured maximum
                         // amount of types yet, then just define this type.
-                        let ty = Rc::new(Type::Func(Rc::new(inter_func_ty)));
+                        let ty = Rc::new(Type::Func(Rc::new(comp_func_ty)));
                         c.push_type(ty)
                     } else {
                         // Otherwise, give up on lifting this function.
@@ -1494,7 +1686,7 @@ impl ComponentBuilder {
                         func_ty,
                         // Scalar functions don't use any canonical options.
                         options: vec![],
-                        core_func,
+                        core_func_index,
                     }))
                 });
             }
@@ -1514,14 +1706,14 @@ impl ComponentBuilder {
         Ok(Step::StillBuilding)
     }
 
-    fn arbitrary_core_section(&mut self, u: &mut Unstructured) -> Result<Step> {
+    fn arbitrary_core_module_section(&mut self, u: &mut Unstructured) -> Result<Step> {
         let config: Rc<dyn Config> = Rc::clone(&self.config);
         let module = crate::core::Module::new_internal(
             config,
             u,
             crate::core::DuplicateImportsBehavior::Disallowed,
         )?;
-        self.push_section(Section::Core(module));
+        self.push_section(Section::CoreModule(module));
         self.total_modules += 1;
         Ok(Step::StillBuilding)
     }
@@ -1550,35 +1742,35 @@ impl ComponentBuilder {
     }
 }
 
-fn canonical_abi_for(inter_func_ty: &FuncType) -> Rc<crate::core::FuncType> {
+fn canonical_abi_for(func_ty: &FuncType) -> Rc<crate::core::FuncType> {
     let to_core_ty = |ty| match ty {
-        InterfaceTypeRef::Primitive(prim_ty) => match prim_ty {
-            PrimitiveInterfaceType::Unit => None,
-            PrimitiveInterfaceType::Char
-            | PrimitiveInterfaceType::Bool
-            | PrimitiveInterfaceType::S8
-            | PrimitiveInterfaceType::U8
-            | PrimitiveInterfaceType::S16
-            | PrimitiveInterfaceType::U16
-            | PrimitiveInterfaceType::S32
-            | PrimitiveInterfaceType::U32 => Some(ValType::I32),
-            PrimitiveInterfaceType::S64 | PrimitiveInterfaceType::U64 => Some(ValType::I64),
-            PrimitiveInterfaceType::Float32 => Some(ValType::F32),
-            PrimitiveInterfaceType::Float64 => Some(ValType::F64),
-            PrimitiveInterfaceType::String => {
+        ComponentValType::Primitive(prim_ty) => match prim_ty {
+            PrimitiveValType::Unit => None,
+            PrimitiveValType::Char
+            | PrimitiveValType::Bool
+            | PrimitiveValType::S8
+            | PrimitiveValType::U8
+            | PrimitiveValType::S16
+            | PrimitiveValType::U16
+            | PrimitiveValType::S32
+            | PrimitiveValType::U32 => Some(ValType::I32),
+            PrimitiveValType::S64 | PrimitiveValType::U64 => Some(ValType::I64),
+            PrimitiveValType::Float32 => Some(ValType::F32),
+            PrimitiveValType::Float64 => Some(ValType::F64),
+            PrimitiveValType::String => {
                 unimplemented!("non-scalar types are not supported yet")
             }
         },
-        InterfaceTypeRef::Type(_) => unimplemented!("non-scalar types are not supported yet"),
+        ComponentValType::Type(_) => unimplemented!("non-scalar types are not supported yet"),
     };
 
     Rc::new(crate::core::FuncType {
-        params: inter_func_ty
+        params: func_ty
             .params
             .iter()
             .flat_map(|ty| to_core_ty(ty.ty))
             .collect(),
-        results: to_core_ty(inter_func_ty.result).into_iter().collect(),
+        results: to_core_ty(func_ty.result).into_iter().collect(),
     })
 }
 
@@ -1589,24 +1781,24 @@ fn inverse_scalar_canonical_abi_for(
     let from_core_ty = |u: &mut Unstructured, core_ty| match core_ty {
         ValType::I32 => u
             .choose(&[
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Char),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Bool),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::S8),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::U8),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::S16),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::U16),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::S32),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::U32),
+                ComponentValType::Primitive(PrimitiveValType::Char),
+                ComponentValType::Primitive(PrimitiveValType::Bool),
+                ComponentValType::Primitive(PrimitiveValType::S8),
+                ComponentValType::Primitive(PrimitiveValType::U8),
+                ComponentValType::Primitive(PrimitiveValType::S16),
+                ComponentValType::Primitive(PrimitiveValType::U16),
+                ComponentValType::Primitive(PrimitiveValType::S32),
+                ComponentValType::Primitive(PrimitiveValType::U32),
             ])
-            .copied(),
+            .cloned(),
         ValType::I64 => u
             .choose(&[
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::S64),
-                InterfaceTypeRef::Primitive(PrimitiveInterfaceType::U64),
+                ComponentValType::Primitive(PrimitiveValType::S64),
+                ComponentValType::Primitive(PrimitiveValType::U64),
             ])
-            .copied(),
-        ValType::F32 => Ok(InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Float32)),
-        ValType::F64 => Ok(InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Float64)),
+            .cloned(),
+        ValType::F32 => Ok(ComponentValType::Primitive(PrimitiveValType::Float32)),
+        ValType::F64 => Ok(ComponentValType::Primitive(PrimitiveValType::Float64)),
         ValType::V128 | ValType::FuncRef | ValType::ExternRef => {
             unreachable!("not used in canonical ABI")
         }
@@ -1621,7 +1813,7 @@ fn inverse_scalar_canonical_abi_for(
             } else {
                 None
             },
-            ty: InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Unit),
+            ty: ComponentValType::Primitive(PrimitiveValType::Unit),
         });
     }
     for core_ty in &core_func_ty.params {
@@ -1640,13 +1832,13 @@ fn inverse_scalar_canonical_abi_for(
                 } else {
                     None
                 },
-                ty: InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Unit),
+                ty: ComponentValType::Primitive(PrimitiveValType::Unit),
             });
         }
     }
 
     let result = match core_func_ty.results.len() {
-        0 => InterfaceTypeRef::Primitive(PrimitiveInterfaceType::Unit),
+        0 => ComponentValType::Primitive(PrimitiveValType::Unit),
         1 => from_core_ty(u, core_func_ty.results[0])?,
         _ => unimplemented!("non-scalar types are not supported yet"),
     };
@@ -1657,15 +1849,18 @@ fn inverse_scalar_canonical_abi_for(
 #[derive(Debug)]
 enum Section {
     Custom(CustomSection),
-    Type(TypeSection),
-    Import(ImportSection),
-    Func(FuncSection),
-    Core(crate::Module),
+    CoreModule(crate::Module),
+    CoreInstance(CoreInstanceSection),
+    CoreAlias(CoreAliasSection),
+    CoreType(CoreTypeSection),
     Component(Component),
     Instance(InstanceSection),
-    Export(ExportSection),
-    Start(StartSection),
     Alias(AliasSection),
+    Type(TypeSection),
+    Canonical(CanonicalSection),
+    Start(StartSection),
+    Import(ImportSection),
+    Export(ExportSection),
 }
 
 #[derive(Debug)]
@@ -1687,17 +1882,13 @@ struct TypeSection {
     types: Vec<Rc<Type>>,
 }
 
-#[derive(Clone, Debug)]
-enum Type {
-    Module(ModuleType),
-    Component(ComponentType),
-    Instance(InstanceType),
-    Func(Rc<FuncType>),
-    Value(ValueType),
-    Interface(InterfaceType),
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CoreType {
+    Func(Rc<crate::core::FuncType>),
+    Module(Rc<ModuleType>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Default)]
 struct ModuleType {
     defs: Vec<ModuleTypeDef>,
     has_memory: bool,
@@ -1705,14 +1896,51 @@ struct ModuleType {
     has_canonical_abi_free: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ModuleTypeDef {
     TypeDef(crate::core::Type),
     Import(crate::core::Import),
+    Alias(CoreAlias),
     Export(String, crate::core::EntityType),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum Type {
+    Defined(DefinedType),
+    Func(Rc<FuncType>),
+    Component(Rc<ComponentType>),
+    Instance(Rc<InstanceType>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CoreAlias {
+    InstanceExport {
+        instance: u32,
+        name: String,
+        kind: CoreInstanceExportAliasKind,
+    },
+    Outer {
+        count: u32,
+        i: u32,
+        kind: CoreOuterAliasKind,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CoreInstanceExportAliasKind {
+    Func,
+    Table,
+    Memory,
+    Global,
+    Tag,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CoreOuterAliasKind {
+    Type(Rc<crate::core::FuncType>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Alias {
     InstanceExport {
         instance: u32,
@@ -1726,7 +1954,7 @@ enum Alias {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum InstanceExportAliasKind {
     Module,
     Component,
@@ -1738,106 +1966,107 @@ enum InstanceExportAliasKind {
     Global,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum OuterAliasKind {
     Module,
     Component,
-    Type,
+    CoreType(Rc<CoreType>),
+    Type(Rc<Type>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ComponentType {
     defs: Vec<ComponentTypeDef>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum ComponentTypeDef {
-    Import(Import),
+    CoreType(Rc<CoreType>),
     Type(Rc<Type>),
-    Export { name: String, ty: u32 },
     Alias(Alias),
+    Import(Import),
+    Export { name: String, ty: ComponentTypeRef },
 }
 
 impl From<InstanceTypeDef> for ComponentTypeDef {
     fn from(def: InstanceTypeDef) -> Self {
         match def {
-            InstanceTypeDef::Type(t) => ComponentTypeDef::Type(t),
-            InstanceTypeDef::Export { name, ty } => ComponentTypeDef::Export { name, ty },
-            InstanceTypeDef::Alias(a) => ComponentTypeDef::Alias(a),
+            InstanceTypeDef::CoreType(t) => Self::CoreType(t),
+            InstanceTypeDef::Type(t) => Self::Type(t),
+            InstanceTypeDef::Export { name, ty } => Self::Export { name, ty },
+            InstanceTypeDef::Alias(a) => Self::Alias(a),
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct InstanceType {
     defs: Vec<InstanceTypeDef>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum InstanceTypeDef {
+    CoreType(Rc<CoreType>),
     Type(Rc<Type>),
-    Export { name: String, ty: u32 },
     Alias(Alias),
+    Export { name: String, ty: ComponentTypeRef },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FuncType {
     params: Vec<OptionalNamedType>,
-    result: InterfaceTypeRef,
+    result: ComponentValType,
 }
 
 impl FuncType {
     fn is_scalar(&self) -> bool {
-        self.params.iter().all(|p| p.is_scalar()) && is_scalar(self.result)
+        self.params.iter().all(|p| p.is_scalar()) && is_scalar(&self.result)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OptionalNamedType {
     name: Option<String>,
-    ty: InterfaceTypeRef,
+    ty: ComponentValType,
 }
 
 impl OptionalNamedType {
     fn is_scalar(&self) -> bool {
-        is_scalar(self.ty)
+        is_scalar(&self.ty)
     }
 }
 
-fn is_scalar(ty: InterfaceTypeRef) -> bool {
+fn is_scalar(ty: &ComponentValType) -> bool {
     match ty {
-        InterfaceTypeRef::Primitive(prim) => match prim {
-            PrimitiveInterfaceType::Unit
-            | PrimitiveInterfaceType::Bool
-            | PrimitiveInterfaceType::S8
-            | PrimitiveInterfaceType::U8
-            | PrimitiveInterfaceType::S16
-            | PrimitiveInterfaceType::U16
-            | PrimitiveInterfaceType::S32
-            | PrimitiveInterfaceType::U32
-            | PrimitiveInterfaceType::S64
-            | PrimitiveInterfaceType::U64
-            | PrimitiveInterfaceType::Float32
-            | PrimitiveInterfaceType::Float64
-            | PrimitiveInterfaceType::Char => true,
-            PrimitiveInterfaceType::String => false,
+        ComponentValType::Primitive(prim) => match prim {
+            PrimitiveValType::Unit
+            | PrimitiveValType::Bool
+            | PrimitiveValType::S8
+            | PrimitiveValType::U8
+            | PrimitiveValType::S16
+            | PrimitiveValType::U16
+            | PrimitiveValType::S32
+            | PrimitiveValType::U32
+            | PrimitiveValType::S64
+            | PrimitiveValType::U64
+            | PrimitiveValType::Float32
+            | PrimitiveValType::Float64
+            | PrimitiveValType::Char => true,
+            PrimitiveValType::String => false,
         },
-        InterfaceTypeRef::Type(_) => false,
+        ComponentValType::Type(_) => false,
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct NamedType {
     name: String,
-    ty: InterfaceTypeRef,
+    ty: ComponentValType,
 }
 
-#[derive(Clone, Debug)]
-struct ValueType(InterfaceTypeRef);
-
-#[derive(Clone, Debug)]
-enum InterfaceType {
-    Primitive(PrimitiveInterfaceType),
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum DefinedType {
+    Primitive(PrimitiveValType),
     Record(RecordType),
     Variant(VariantType),
     List(ListType),
@@ -1849,50 +2078,50 @@ enum InterfaceType {
     Expected(ExpectedType),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct RecordType {
     fields: Vec<NamedType>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct VariantType {
     cases: Vec<(NamedType, Option<u32>)>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ListType {
-    elem_ty: InterfaceTypeRef,
+    elem_ty: ComponentValType,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct TupleType {
-    fields: Vec<InterfaceTypeRef>,
+    fields: Vec<ComponentValType>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FlagsType {
     fields: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct EnumType {
     variants: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct UnionType {
-    variants: Vec<InterfaceTypeRef>,
+    variants: Vec<ComponentValType>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct OptionType {
-    inner_ty: InterfaceTypeRef,
+    inner_ty: ComponentValType,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ExpectedType {
-    ok_ty: InterfaceTypeRef,
-    err_ty: InterfaceTypeRef,
+    ok_ty: ComponentValType,
+    err_ty: ComponentValType,
 }
 
 #[derive(Debug)]
@@ -1900,14 +2129,14 @@ struct ImportSection {
     imports: Vec<Import>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct Import {
     name: String,
-    ty: u32,
+    ty: ComponentTypeRef,
 }
 
 #[derive(Debug)]
-struct FuncSection {
+struct CanonicalSection {
     funcs: Vec<Func>,
 }
 
@@ -1916,11 +2145,11 @@ enum Func {
     CanonLift {
         func_ty: u32,
         options: Vec<CanonOpt>,
-        core_func: u32,
+        core_func_index: u32,
     },
     CanonLower {
         options: Vec<CanonOpt>,
-        inter_func: u32,
+        func_index: u32,
     },
 }
 
@@ -1929,7 +2158,9 @@ enum CanonOpt {
     StringUtf8,
     StringUtf16,
     StringLatin1Utf16,
-    Into { instance: u32 },
+    Memory(u32),
+    Realloc(u32),
+    PostReturn(u32),
 }
 
 #[derive(Debug)]
@@ -1943,3 +2174,14 @@ struct StartSection {}
 
 #[derive(Debug)]
 struct AliasSection {}
+
+#[derive(Debug)]
+struct CoreInstanceSection {}
+
+#[derive(Debug)]
+struct CoreAliasSection {}
+
+#[derive(Debug)]
+struct CoreTypeSection {
+    types: Vec<Rc<CoreType>>,
+}

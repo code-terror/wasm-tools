@@ -82,7 +82,7 @@ pub(crate) fn arbitrary_loop<'a>(
     assert!(max >= min);
     for _ in 0..min {
         if !f(u)? {
-            break;
+            return Err(arbitrary::Error::IncorrectFormat);
         }
     }
     for _ in 0..(max - min) {
@@ -103,10 +103,10 @@ pub(crate) fn arbitrary_loop<'a>(
 pub(crate) fn limited_str<'a>(max_size: usize, u: &mut Unstructured<'a>) -> Result<&'a str> {
     let size = u.arbitrary_len::<u8>()?;
     let size = std::cmp::min(size, max_size);
-    match str::from_utf8(&u.peek_bytes(size).unwrap()) {
+    match str::from_utf8(u.peek_bytes(size).unwrap()) {
         Ok(s) => {
             u.bytes(size).unwrap();
-            Ok(s.into())
+            Ok(s)
         }
         Err(e) => {
             let i = e.valid_up_to();
@@ -147,5 +147,6 @@ pub(crate) fn unique_non_empty_string(
         use std::fmt::Write;
         write!(&mut s, "{}", names.len()).unwrap();
     }
+    names.insert(s.clone());
     Ok(s)
 }

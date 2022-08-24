@@ -60,7 +60,7 @@ fn collect_test_files(path: &Path, list: &mut Vec<BenchmarkInput>) -> Result<()>
                 };
                 for directive in wast.directives {
                     match directive {
-                        wast::WastDirective::Module(mut module) => {
+                        wast::WastDirective::Wat(mut module) => {
                             let wasm = module.encode()?;
                             list.push(BenchmarkInput::new(path.clone(), wasm));
                         }
@@ -127,8 +127,8 @@ fn read_all_wasm(wasm: &[u8]) -> Result<()> {
             ElementSection(s) => {
                 for item in s {
                     let item = item?;
-                    if let ElementKind::Active { init_expr, .. } = item.kind {
-                        for op in init_expr.get_operators_reader() {
+                    if let ElementKind::Active { offset_expr, .. } = item.kind {
+                        for op in offset_expr.get_operators_reader() {
                             op?;
                         }
                     }
@@ -140,8 +140,8 @@ fn read_all_wasm(wasm: &[u8]) -> Result<()> {
             DataSection(s) => {
                 for item in s {
                     let item = item?;
-                    if let DataKind::Active { init_expr, .. } = item.kind {
-                        for op in init_expr.get_operators_reader() {
+                    if let DataKind::Active { offset_expr, .. } = item.kind {
+                        for op in offset_expr.get_operators_reader() {
                             op?;
                         }
                     }
@@ -157,15 +157,54 @@ fn read_all_wasm(wasm: &[u8]) -> Result<()> {
             }
 
             // Component sections
-            ComponentTypeSection(_) => todo!("component-model"),
-            ComponentImportSection(_) => todo!("component-model"),
-            ComponentFunctionSection(_) => todo!("component-model"),
-            ModuleSection { .. } => todo!("component-model"),
-            ComponentSection { .. } => todo!("component-model"),
-            InstanceSection(_) => todo!("component-model"),
-            ComponentExportSection(_) => todo!("component-model"),
-            ComponentStartSection { .. } => todo!("component-model"),
-            AliasSection(_) => todo!("component-model"),
+            ModuleSection { .. } => {}
+            InstanceSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            AliasSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            CoreTypeSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            ComponentSection { .. } => {}
+            ComponentInstanceSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            ComponentAliasSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            ComponentTypeSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            ComponentCanonicalSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            ComponentStartSection { .. } => {}
+            ComponentImportSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
+            ComponentExportSection(s) => {
+                for item in s {
+                    item?;
+                }
+            }
 
             Version { .. }
             | StartSection { .. }

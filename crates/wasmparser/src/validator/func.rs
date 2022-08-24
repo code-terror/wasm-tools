@@ -1,5 +1,5 @@
 use super::operators::OperatorValidator;
-use crate::{BinaryReader, Result, Type};
+use crate::{BinaryReader, Result, ValType};
 use crate::{FunctionBody, Operator, WasmFeatures, WasmModuleResources};
 
 /// Validation context for a WebAssembly function.
@@ -12,6 +12,7 @@ use crate::{FunctionBody, Operator, WasmFeatures, WasmModuleResources};
 pub struct FuncValidator<T> {
     validator: OperatorValidator,
     resources: T,
+    index: u32,
 }
 
 impl<T: WasmModuleResources> FuncValidator<T> {
@@ -25,6 +26,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     /// The returned validator can be used to then parse a [`FunctionBody`], for
     /// example, to read locals and validate operators.
     pub fn new(
+        index: u32,
         ty: u32,
         offset: usize,
         resources: T,
@@ -33,6 +35,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
         Ok(FuncValidator {
             validator: OperatorValidator::new_func(ty, offset, features, &resources)?,
             resources,
+            index,
         })
     }
 
@@ -69,7 +72,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
         for _ in 0..reader.read_var_u32()? {
             let offset = reader.original_position();
             let cnt = reader.read_var_u32()?;
-            let ty = reader.read_type()?;
+            let ty = reader.read_val_type()?;
             self.define_locals(offset, cnt, ty)?;
         }
         Ok(())
@@ -79,7 +82,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     ///
     /// This should be used if the application is already reading local
     /// definitions and there's no need to re-parse the function again.
-    pub fn define_locals(&mut self, offset: usize, count: u32, ty: Type) -> Result<()> {
+    pub fn define_locals(&mut self, offset: usize, count: u32, ty: ValType) -> Result<()> {
         self.validator.define_locals(offset, count, ty)
     }
 
@@ -113,6 +116,12 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     pub fn resources(&self) -> &T {
         &self.resources
     }
+
+    /// The index of the function within the module's function index space that
+    /// is being validated.
+    pub fn index(&self) -> u32 {
+        self.index
+    }
 }
 
 #[cfg(test)]
@@ -143,7 +152,7 @@ mod tests {
         fn type_of_function(&self, _func_idx: u32) -> Option<&Self::FuncType> {
             todo!()
         }
-        fn element_type_at(&self, _at: u32) -> Option<Type> {
+        fn element_type_at(&self, _at: u32) -> Option<ValType> {
             todo!()
         }
         fn element_count(&self) -> u32 {
@@ -166,17 +175,17 @@ mod tests {
         fn len_outputs(&self) -> usize {
             0
         }
-        fn input_at(&self, _at: u32) -> Option<Type> {
+        fn input_at(&self, _at: u32) -> Option<ValType> {
             todo!()
         }
-        fn output_at(&self, _at: u32) -> Option<Type> {
+        fn output_at(&self, _at: u32) -> Option<ValType> {
             todo!()
         }
     }
 
     #[test]
     fn operand_stack_height() {
-        let mut v = FuncValidator::new(0, 0, &EmptyResources, &Default::default()).unwrap();
+        let mut v = FuncValidator::new(0, 0, 0, &EmptyResources, &Default::default()).unwrap();
 
         // Initially zero values on the stack.
         assert_eq!(v.operand_stack_height(), 0);

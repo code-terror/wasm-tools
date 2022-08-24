@@ -1,5 +1,6 @@
-use crate::{encoders, Section, SectionId};
-use std::convert::TryInto;
+use crate::{encode_section, CustomSection, Encode, Section, SectionId};
+
+const VERSION: u32 = 2;
 
 /// An encoder for the [linking custom
 /// section](https://github.com/WebAssembly/tool-conventions/blob/master/Linking.md#linking-metadata-section).
@@ -36,7 +37,7 @@ use std::convert::TryInto;
 /// module.section(&linking);
 /// let wasm_bytes = module.finish();
 /// ```
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct LinkingSection {
     bytes: Vec<u8>,
 }
@@ -60,29 +61,27 @@ impl LinkingSection {
     }
 }
 
+impl Default for LinkingSection {
+    fn default() -> Self {
+        let mut bytes = Vec::new();
+        VERSION.encode(&mut bytes);
+        Self { bytes }
+    }
+}
+
+impl Encode for LinkingSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        CustomSection {
+            name: "linking",
+            data: &self.bytes,
+        }
+        .encode(sink);
+    }
+}
+
 impl Section for LinkingSection {
     fn id(&self) -> u8 {
         SectionId::Custom.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let name_len = encoders::u32(u32::try_from("linking".len()).unwrap());
-        let name_len_len = name_len.len();
-
-        let version = 2;
-
-        sink.extend(
-            encoders::u32(
-                u32::try_from(name_len_len + "linking".len() + 1 + self.bytes.len()).unwrap(),
-            )
-            .chain(name_len)
-            .chain(b"linking".iter().copied())
-            .chain(encoders::u32(version))
-            .chain(self.bytes.iter().copied()),
-        );
     }
 }
 
@@ -126,16 +125,11 @@ impl SymbolTable {
     /// The `name` must be omitted if `index` references an imported table and
     /// the `WASM_SYM_EXPLICIT_NAME` flag is not set.
     pub fn function(&mut self, flags: u32, index: u32, name: Option<&str>) -> &mut Self {
-        self.bytes.extend(
-            encoders::u32(SYMTAB_FUNCTION)
-                .chain(encoders::u32(flags))
-                .chain(encoders::u32(index)),
-        );
+        SYMTAB_FUNCTION.encode(&mut self.bytes);
+        flags.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
         if let Some(name) = name {
-            self.bytes.extend(
-                encoders::u32(name.len().try_into().unwrap())
-                    .chain(name.as_bytes().iter().copied()),
-            );
+            name.encode(&mut self.bytes);
         }
         self.num_added += 1;
         self
@@ -146,16 +140,11 @@ impl SymbolTable {
     /// The `name` must be omitted if `index` references an imported table and
     /// the `WASM_SYM_EXPLICIT_NAME` flag is not set.
     pub fn global(&mut self, flags: u32, index: u32, name: Option<&str>) -> &mut Self {
-        self.bytes.extend(
-            encoders::u32(SYMTAB_GLOBAL)
-                .chain(encoders::u32(flags))
-                .chain(encoders::u32(index)),
-        );
+        SYMTAB_GLOBAL.encode(&mut self.bytes);
+        flags.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
         if let Some(name) = name {
-            self.bytes.extend(
-                encoders::u32(name.len().try_into().unwrap())
-                    .chain(name.as_bytes().iter().copied()),
-            );
+            name.encode(&mut self.bytes);
         }
         self.num_added += 1;
         self
@@ -168,16 +157,11 @@ impl SymbolTable {
     /// The `name` must be omitted if `index` references an imported table and
     /// the `WASM_SYM_EXPLICIT_NAME` flag is not set.
     pub fn table(&mut self, flags: u32, index: u32, name: Option<&str>) -> &mut Self {
-        self.bytes.extend(
-            encoders::u32(SYMTAB_TABLE)
-                .chain(encoders::u32(flags))
-                .chain(encoders::u32(index)),
-        );
+        SYMTAB_TABLE.encode(&mut self.bytes);
+        flags.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
         if let Some(name) = name {
-            self.bytes.extend(
-                encoders::u32(name.len().try_into().unwrap())
-                    .chain(name.as_bytes().iter().copied()),
-            );
+            name.encode(&mut self.bytes);
         }
         self.num_added += 1;
         self
@@ -190,18 +174,13 @@ impl SymbolTable {
         name: &str,
         definition: Option<DataSymbolDefinition>,
     ) -> &mut Self {
-        self.bytes.extend(
-            encoders::u32(SYMTAB_DATA)
-                .chain(encoders::u32(flags))
-                .chain(encoders::u32(name.len().try_into().unwrap()))
-                .chain(name.as_bytes().iter().copied()),
-        );
+        SYMTAB_DATA.encode(&mut self.bytes);
+        flags.encode(&mut self.bytes);
+        name.encode(&mut self.bytes);
         if let Some(def) = definition {
-            self.bytes.extend(
-                encoders::u32(def.index)
-                    .chain(encoders::u32(def.offset))
-                    .chain(encoders::u32(def.size)),
-            );
+            def.index.encode(&mut self.bytes);
+            def.offset.encode(&mut self.bytes);
+            def.size.encode(&mut self.bytes);
         }
         self.num_added += 1;
         self
@@ -209,21 +188,6 @@ impl SymbolTable {
 
     // TODO: sections
 
-    fn encode(&self, bytes: &mut Vec<u8>) {
-        let num_added = encoders::u32(self.num_added);
-        let num_added_len = num_added.len();
-        let payload_len = num_added_len + self.bytes.len();
-        bytes.extend(
-            std::iter::once(WASM_SYMBOL_TABLE)
-                .chain(encoders::u32(payload_len.try_into().unwrap()))
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
-    }
-}
-
-/// # Symbol definition flags.
-impl SymbolTable {
     /// This is a weak symbol.
     ///
     /// This flag is mutually exclusive with `WASM_SYM_BINDING_LOCAL`.
@@ -273,6 +237,13 @@ impl SymbolTable {
     /// This symbol is intended to be included in the linker output, regardless
     /// of whether it is used by the program.
     pub const WASM_SYM_NO_STRIP: u32 = 0x80;
+}
+
+impl Encode for SymbolTable {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(WASM_SYMBOL_TABLE);
+        encode_section(sink, self.num_added, &self.bytes);
+    }
 }
 
 /// The definition of a data symbol within a symbol table.

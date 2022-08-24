@@ -1,34 +1,32 @@
-use crate::{encoders, Section, SectionId};
+use super::{
+    CORE_FUNCTION_SORT, CORE_GLOBAL_SORT, CORE_MEMORY_SORT, CORE_TABLE_SORT, CORE_TAG_SORT,
+};
+use crate::{encode_section, Encode, Section, SectionId};
 
-/// Represents an export from a WebAssembly module.
+/// Represents the kind of an export from a WebAssembly module.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Export {
+pub enum ExportKind {
     /// The export is a function.
-    Function(u32),
+    Func,
     /// The export is a table.
-    Table(u32),
+    Table,
     /// The export is a memory.
-    Memory(u32),
+    Memory,
     /// The export is a global.
-    Global(u32),
+    Global,
     /// The export is a tag.
-    ///
-    /// This variant is used with the exception handling proposal.
-    Tag(u32),
+    Tag,
 }
 
-impl Export {
-    pub(crate) fn encode(&self, bytes: &mut Vec<u8>) {
-        let (ty, index) = match self {
-            Self::Function(i) => (0x00, *i),
-            Self::Table(i) => (0x01, *i),
-            Self::Memory(i) => (0x02, *i),
-            Self::Global(i) => (0x03, *i),
-            Self::Tag(i) => (0x04, *i),
-        };
-
-        bytes.push(ty);
-        bytes.extend(encoders::u32(index));
+impl Encode for ExportKind {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        sink.push(match self {
+            Self::Func => CORE_FUNCTION_SORT,
+            Self::Table => CORE_TABLE_SORT,
+            Self::Memory => CORE_MEMORY_SORT,
+            Self::Global => CORE_GLOBAL_SORT,
+            Self::Tag => CORE_TAG_SORT,
+        });
     }
 }
 
@@ -37,10 +35,10 @@ impl Export {
 /// # Example
 ///
 /// ```rust
-/// use wasm_encoder::{Module, ExportSection, Export};
+/// use wasm_encoder::{Module, ExportSection, ExportKind};
 ///
 /// let mut exports = ExportSection::new();
-/// exports.export("foo", Export::Function(0));
+/// exports.export("foo", ExportKind::Func, 0);
 ///
 /// let mut module = Module::new();
 /// module.section(&exports);
@@ -70,29 +68,23 @@ impl ExportSection {
     }
 
     /// Define an export in the export section.
-    pub fn export(&mut self, name: &str, export: Export) -> &mut Self {
-        self.bytes.extend(encoders::str(name));
-        export.encode(&mut self.bytes);
+    pub fn export(&mut self, name: &str, kind: ExportKind, index: u32) -> &mut Self {
+        name.encode(&mut self.bytes);
+        kind.encode(&mut self.bytes);
+        index.encode(&mut self.bytes);
         self.num_added += 1;
         self
+    }
+}
+
+impl Encode for ExportSection {
+    fn encode(&self, sink: &mut Vec<u8>) {
+        encode_section(sink, self.num_added, &self.bytes);
     }
 }
 
 impl Section for ExportSection {
     fn id(&self) -> u8 {
         SectionId::Export.into()
-    }
-
-    fn encode<S>(&self, sink: &mut S)
-    where
-        S: Extend<u8>,
-    {
-        let num_added = encoders::u32(self.num_added);
-        let n = num_added.len();
-        sink.extend(
-            encoders::u32(u32::try_from(n + self.bytes.len()).unwrap())
-                .chain(num_added)
-                .chain(self.bytes.iter().copied()),
-        );
     }
 }
