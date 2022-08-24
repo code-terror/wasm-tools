@@ -64,7 +64,7 @@
     i32.const 0
     i32.const 0
     i32.const 0
-    memory.init $seg $b
+    memory.init $b $seg
 
     memory.size $a drop
     memory.size $b drop
@@ -187,6 +187,16 @@
     i32.const 0 v128.load16_splat $b drop
     i32.const 0 v128.load32_splat $b drop
     i32.const 0 v128.load64_splat $b drop
+    i32.const 0 v128.load32_zero $b drop
+    i32.const 0 v128.load64_zero $b drop
+    i32.const 0 v128.const i64x2 0 0 v128.load8_lane $b 0 drop
+    i32.const 0 v128.const i64x2 0 0 v128.load16_lane $b 0 drop
+    i32.const 0 v128.const i64x2 0 0 v128.load32_lane $b 0 drop
+    i32.const 0 v128.const i64x2 0 0 v128.load64_lane $b 0 drop
+    i32.const 0 v128.const i64x2 0 0 v128.store8_lane $b 0
+    i32.const 0 v128.const i64x2 0 0 v128.store16_lane $b 0
+    i32.const 0 v128.const i64x2 0 0 v128.store32_lane $b 0
+    i32.const 0 v128.const i64x2 0 0 v128.store64_lane $b 0
     i32.const 0 i32.const 0 i8x16.splat v128.store $b
   )
 )

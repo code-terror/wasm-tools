@@ -6,4 +6,4 @@
       else
       local.get 1
       ))
-  "Unknown opcode: 0x17") ;; update this error once wasmparser is updated
+  "illegal opcode: 0x17") ;; update this error once wasmparser is updated

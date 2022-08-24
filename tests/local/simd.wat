@@ -17,6 +17,281 @@
     v128.const i32x4 0xff00ff01 0xff00ff0f 0xff00ffff 0xff00ff7f
     v128.const i32x4 0x00550055 0x00550055 0x00550055 0x00550155
     i8x16.shuffle 16 1 18 3 20 5 22 7 24 9 26 11 28 13 30 15)
+
+  (func
+    i32.const 0 v128.load32_zero drop
+    i32.const 0 v128.load64_zero drop)
+
+  ;; Where a result is produced, this uses i8x16.neg and i32.eqz to check that
+  ;; a value of the right type is produced
+  (func
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i16x8.extmul_low_i8x16_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i16x8.extmul_high_i8x16_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i16x8.extmul_low_i8x16_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i16x8.extmul_high_i8x16_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i32x4.extmul_low_i16x8_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i32x4.extmul_low_i16x8_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i32x4.extmul_high_i16x8_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i32x4.extmul_high_i16x8_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.extmul_low_i32x4_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.extmul_low_i32x4_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.extmul_high_i32x4_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.extmul_high_i32x4_u
+    i8x16.neg
+    drop
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.load8_lane 15
+    i8x16.neg
+    drop
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.load16_lane 7
+    i8x16.neg
+    drop
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.load32_lane 3
+    i8x16.neg
+    drop
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.load64_lane 1
+    i8x16.neg
+    drop
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.store8_lane 15
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.store16_lane 7
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.store32_lane 3
+
+    i32.const 0
+    v128.const i32x4 1 2 3 4
+    v128.store64_lane 1
+
+    v128.const i32x4 1 2 3 4
+    v128.any_true
+    i32.eqz
+    drop
+
+    v128.const i32x4 1 2 3 4
+    i8x16.all_true
+    i32.eqz
+    drop
+
+    v128.const i32x4 1 2 3 4
+    i16x8.all_true
+    i32.eqz
+    drop
+
+    v128.const i32x4 1 2 3 4
+    i32x4.all_true
+    i32.eqz
+    drop
+
+    v128.const i32x4 1 2 3 4
+    i64x2.all_true
+    i32.eqz
+    drop
+
+    v128.const i64x2 1 2
+    i64x2.bitmask
+    i32.eqz
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i64x2.extend_low_i32x4_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i64x2.extend_high_i32x4_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i64x2.extend_low_i32x4_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i64x2.extend_high_i32x4_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.eq
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.ne
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.lt_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.gt_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.le_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i64x2.ge_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    v128.const i32x4 0 0 0 0
+    i16x8.q15mulr_sat_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    f32x4.demote_f64x2_zero
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    f64x2.promote_low_f32x4
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    f64x2.convert_low_i32x4_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    f64x2.convert_low_i32x4_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i32x4.trunc_sat_f64x2_s_zero
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i32x4.trunc_sat_f64x2_u_zero
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i64x2.abs
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i8x16.popcnt
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i16x8.extadd_pairwise_i8x16_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i16x8.extadd_pairwise_i8x16_u
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i32x4.extadd_pairwise_i16x8_s
+    i8x16.neg
+    drop
+
+    v128.const i32x4 0 0 0 0
+    i32x4.extadd_pairwise_i16x8_u
+    i8x16.neg
+    drop
+
+    )
+
   (memory (;0;) 1)
   (export "v128_load_0" (func 0))
   (export "v128_store_0" (func 1))

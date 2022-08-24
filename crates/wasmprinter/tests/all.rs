@@ -9,6 +9,16 @@ fn no_panic() {
     )
     .unwrap();
     wasmprinter::print_bytes(&bytes).unwrap();
+
+    let bytes = wat::parse_str(
+        r#"
+            (module
+                (func end)
+            )
+        "#,
+    )
+    .unwrap();
+    wasmprinter::print_bytes(&bytes).unwrap();
 }
 
 #[test]
@@ -25,7 +35,7 @@ fn code_section_overflow() {
     .unwrap();
     let err = wasmprinter::print_bytes(&bytes).unwrap_err();
     assert!(
-        err.to_string().contains("invalid code section"),
+        err.to_string().contains("unexpected end-of-file"),
         "{:?}",
         err
     );
@@ -62,6 +72,99 @@ fn locals_overflow() {
     let err = wasmprinter::print_bytes(&bytes).unwrap_err();
     assert!(
         err.to_string().contains("maximum number of locals"),
+        "{:?}",
+        err
+    );
+}
+
+#[test]
+fn memarg_too_big() {
+    let bytes = wat::parse_str(
+        r#"
+            (module binary
+                "\00asm" "\01\00\00\00"     ;; module header
+
+                "\0b"           ;; data section
+                "\07"           ;; size of section
+                "\01"           ;; number of segments
+                "\00"           ;; flags=active
+                "\2e"           ;; i32.load16_s
+                "\3f"           ;; alignment
+                "\00"           ;; offset
+                "\0b"           ;; end
+                "\00"           ;; data size
+            )
+        "#,
+    )
+    .unwrap();
+    let err = wasmprinter::print_bytes(&bytes).unwrap_err();
+    assert!(
+        err.to_string().contains("alignment in memarg too large"),
+        "{:?}",
+        err
+    );
+}
+
+#[test]
+fn no_panic_dangling_else() {
+    let bytes = wat::parse_str(
+        r#"
+            (module
+                (func else)
+            )
+        "#,
+    )
+    .unwrap();
+    wasmprinter::print_bytes(&bytes).unwrap();
+}
+
+#[test]
+fn dangling_if() {
+    let bytes = wat::parse_str(
+        r#"
+            (module
+                (func if)
+            )
+        "#,
+    )
+    .unwrap();
+    let wat = wasmprinter::print_bytes(&bytes).unwrap();
+    wat::parse_str(&wat).unwrap();
+}
+
+#[test]
+fn no_oom() {
+    // Whatever is printed here, it shouldn't take more than 500MB to print
+    // since it's only 20k functions.
+    let mut s = String::new();
+    s.push_str("(module\n");
+    for _ in 0..20_000 {
+        s.push_str("(func if)\n");
+    }
+    s.push(')');
+    let bytes = wat::parse_str(&s).unwrap();
+    let wat = wasmprinter::print_bytes(&bytes).unwrap();
+    assert!(wat.len() < 500_000_000);
+}
+
+#[test]
+fn dont_reserve_the_world() {
+    let bytes = wat::parse_str(
+        r#"
+            (module binary
+                "\00asm" "\01\00\00\00"     ;; module header
+
+                "\03"               ;; function section
+                "\05"               ;; section size
+                "\ff\ff\ff\ff\0f"   ;; number of functions (u32::MAX)
+            )
+        "#,
+    )
+    .unwrap();
+    let err = wasmprinter::print_bytes(&bytes).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("functions which exceeds the limit"),
         "{:?}",
         err
     );

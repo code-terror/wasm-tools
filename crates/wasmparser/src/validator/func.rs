@@ -1,5 +1,5 @@
-use crate::operators_validator::OperatorValidator;
-use crate::{BinaryReader, Result, Type};
+use super::operators::OperatorValidator;
+use crate::{BinaryReader, Result, ValType};
 use crate::{FunctionBody, Operator, WasmFeatures, WasmModuleResources};
 
 /// Validation context for a WebAssembly function.
@@ -12,6 +12,7 @@ use crate::{FunctionBody, Operator, WasmFeatures, WasmModuleResources};
 pub struct FuncValidator<T> {
     validator: OperatorValidator,
     resources: T,
+    index: u32,
 }
 
 impl<T: WasmModuleResources> FuncValidator<T> {
@@ -25,15 +26,25 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     /// The returned validator can be used to then parse a [`FunctionBody`], for
     /// example, to read locals and validate operators.
     pub fn new(
+        index: u32,
         ty: u32,
         offset: usize,
         resources: T,
         features: &WasmFeatures,
     ) -> Result<FuncValidator<T>> {
         Ok(FuncValidator {
-            validator: OperatorValidator::new(ty, offset, features, &resources)?,
+            validator: OperatorValidator::new_func(ty, offset, features, &resources)?,
             resources,
+            index,
         })
+    }
+
+    /// Get the current height of the operand stack.
+    ///
+    /// This returns the height of the whole operand stack for this function,
+    /// not just for the current control frame.
+    pub fn operand_stack_height(&self) -> u32 {
+        self.validator.operands.len() as u32
     }
 
     /// Convenience function to validate an entire function's body.
@@ -43,6 +54,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     pub fn validate(&mut self, body: &FunctionBody<'_>) -> Result<()> {
         let mut reader = body.get_binary_reader();
         self.read_locals(&mut reader)?;
+        reader.allow_memarg64(self.validator.features.memory64);
         while !reader.eof() {
             let pos = reader.original_position();
             let op = reader.read_operator()?;
@@ -60,7 +72,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
         for _ in 0..reader.read_var_u32()? {
             let offset = reader.original_position();
             let cnt = reader.read_var_u32()?;
-            let ty = reader.read_type()?;
+            let ty = reader.read_val_type()?;
             self.define_locals(offset, cnt, ty)?;
         }
         Ok(())
@@ -70,7 +82,7 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     ///
     /// This should be used if the application is already reading local
     /// definitions and there's no need to re-parse the function again.
-    pub fn define_locals(&mut self, offset: usize, count: u32, ty: Type) -> Result<()> {
+    pub fn define_locals(&mut self, offset: usize, count: u32, ty: ValType) -> Result<()> {
         self.validator.define_locals(offset, count, ty)
     }
 
@@ -103,5 +115,98 @@ impl<T: WasmModuleResources> FuncValidator<T> {
     /// Returns the underlying module resources that this validator is using.
     pub fn resources(&self) -> &T {
         &self.resources
+    }
+
+    /// The index of the function within the module's function index space that
+    /// is being validated.
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::WasmFuncType;
+
+    struct EmptyResources;
+
+    impl WasmModuleResources for EmptyResources {
+        type FuncType = EmptyFuncType;
+
+        fn table_at(&self, _at: u32) -> Option<crate::TableType> {
+            todo!()
+        }
+        fn memory_at(&self, _at: u32) -> Option<crate::MemoryType> {
+            todo!()
+        }
+        fn tag_at(&self, _at: u32) -> Option<&Self::FuncType> {
+            todo!()
+        }
+        fn global_at(&self, _at: u32) -> Option<crate::GlobalType> {
+            todo!()
+        }
+        fn func_type_at(&self, _type_idx: u32) -> Option<&Self::FuncType> {
+            Some(&EmptyFuncType)
+        }
+        fn type_of_function(&self, _func_idx: u32) -> Option<&Self::FuncType> {
+            todo!()
+        }
+        fn element_type_at(&self, _at: u32) -> Option<ValType> {
+            todo!()
+        }
+        fn element_count(&self) -> u32 {
+            todo!()
+        }
+        fn data_count(&self) -> Option<u32> {
+            todo!()
+        }
+        fn is_function_referenced(&self, _idx: u32) -> bool {
+            todo!()
+        }
+    }
+
+    struct EmptyFuncType;
+
+    impl WasmFuncType for EmptyFuncType {
+        fn len_inputs(&self) -> usize {
+            0
+        }
+        fn len_outputs(&self) -> usize {
+            0
+        }
+        fn input_at(&self, _at: u32) -> Option<ValType> {
+            todo!()
+        }
+        fn output_at(&self, _at: u32) -> Option<ValType> {
+            todo!()
+        }
+    }
+
+    #[test]
+    fn operand_stack_height() {
+        let mut v = FuncValidator::new(0, 0, 0, &EmptyResources, &Default::default()).unwrap();
+
+        // Initially zero values on the stack.
+        assert_eq!(v.operand_stack_height(), 0);
+
+        // Pushing a constant value makes use have one value on the stack.
+        assert!(v.op(0, &Operator::I32Const { value: 0 }).is_ok());
+        assert_eq!(v.operand_stack_height(), 1);
+
+        // Entering a new control block does not affect the stack height.
+        assert!(v
+            .op(
+                1,
+                &Operator::Block {
+                    ty: crate::BlockType::Empty
+                }
+            )
+            .is_ok());
+        assert_eq!(v.operand_stack_height(), 1);
+
+        // Pushing another constant value makes use have two values on the stack.
+        assert!(v.op(2, &Operator::I32Const { value: 99 }).is_ok());
+        assert_eq!(v.operand_stack_height(), 2);
     }
 }

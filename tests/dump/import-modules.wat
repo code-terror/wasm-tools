@@ -1,9 +1,10 @@
-(module
-  (import "" (module $m
-    (import "" (module))
+(component
+  (import "" (core module $m1
+    (import "" "f" (func))
   ))
-  (import "" (module $i
-    (import "" (func))
-  ))
-  (instance $i (instantiate $m (module $i)))
+  (core module $m2
+    (func (export "f"))
+  )
+  (core instance $i1 (instantiate $m2))
+  (core instance $i2 (instantiate $m1 (with "" (instance $i1))))
 )

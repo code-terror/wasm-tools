@@ -5,6 +5,12 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel any in-flight jobs for the same PR/branch so there's only one active
+# at a time
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     name: Test
@@ -35,34 +41,12 @@ jobs:
     - name: Install Rust (rustup)
       run: rustup update ${{ matrix.rust }} --no-self-update && rustup default ${{ matrix.rust }}
       shell: bash
-    - name: Install Ninja (Linux)
-      run: sudo apt install ninja-build
-      if: matrix.os == 'ubuntu-latest'
-    - name: Install Ninja (macOS)
-      run: brew install ninja
-      if: matrix.os == 'macos-latest'
-    - name: Install Ninja (Windows)
-      run: choco install ninja
-      if: matrix.os == 'windows-latest'
-
-    - name: Build wabt
-      run: |
-        set -e
-        cd tests/wabt
-        cmake . -G Ninja -DBUILD_TESTS=OFF
-        ninja wast2json wat2wasm wasm2wat
-      shell: bash
-    - name: Add wabt to path (unix)
-      run: echo ::add-path::`pwd`/tests/wabt
-      if: matrix.os != 'windows-latest'
-    - name: Add wabt to path (windows)
-      run: echo ::add-path::D:/a/wasm-tools/wasm-tools/tests/wabt
-      if: matrix.os == 'windows-latest'
-
     - run: cargo test --all
     - run: cargo test --manifest-path crates/wasmparser/Cargo.toml --features deterministic
     - run: cargo build --manifest-path crates/wast/Cargo.toml --no-default-features
     - run: cargo build --manifest-path crates/wast/Cargo.toml --no-default-features --features wasm-module
+    - run: cmake -S ${{github.workspace}}/examples -B ${{github.workspace}}/examples/build -DCMAKE_BUILD_TYPE=Release
+    - run: cmake --build ${{github.workspace}}/examples/build --config Release
 
   rustfmt:
     name: Rustfmt
@@ -95,3 +79,24 @@ jobs:
       run: rustup update nightly && rustup default nightly
     - run: cargo install cargo-fuzz
     - run: cargo fuzz build
+
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: cargo check --benches -p wasm-smith
+      - run: cargo check --no-default-features
+      - run: cargo check --no-default-features --features print
+      - run: cargo check --no-default-features --features parse
+      - run: cargo check --no-default-features --features validate
+      - run: cargo check --no-default-features --features smith
+      - run: cargo check --no-default-features --features shrink
+      - run: cargo check --no-default-features --features mutate
+      - run: cargo check --no-default-features --features dump
+      - run: cargo check --no-default-features --features objdump
+
+  doc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - run: cargo doc --all

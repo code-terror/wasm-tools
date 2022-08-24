@@ -66,7 +66,7 @@ fuzz_target!(|data: Vec<Vec<u8>>| {
             .expect("full parse stopped early")
             .expect("full parse failed but incremental succeeded");
         match (payload, expected_payload) {
-            (End, End) => match stack.pop() {
+            (End(_), End(_)) => match stack.pop() {
                 Some(p) => parser = p,
                 None => {
                     log::debug!("no more parsers");
@@ -74,21 +74,31 @@ fuzz_target!(|data: Vec<Vec<u8>>| {
                     break;
                 }
             },
-            (Version { num: a, range: ar }, Version { num: b, range: br }) => {
+            (
+                Version {
+                    num: a,
+                    encoding: ae,
+                    range: ar,
+                },
+                Version {
+                    num: b,
+                    encoding: be,
+                    range: br,
+                },
+            ) => {
                 assert_eq!(a, b);
+                assert_eq!(ae, be);
                 assert_eq!(ar, br);
             }
 
             (TypeSection(a), TypeSection(b)) => assert_eq!(a.range(), b.range()),
             (ImportSection(a), ImportSection(b)) => assert_eq!(a.range(), b.range()),
-            (AliasSection(a), AliasSection(b)) => assert_eq!(a.range(), b.range()),
-            (InstanceSection(a), InstanceSection(b)) => assert_eq!(a.range(), b.range()),
-            (ModuleSection(a), ModuleSection(b)) => assert_eq!(a.range(), b.range()),
             (FunctionSection(a), FunctionSection(b)) => assert_eq!(a.range(), b.range()),
             (TableSection(a), TableSection(b)) => assert_eq!(a.range(), b.range()),
             (MemorySection(a), MemorySection(b)) => assert_eq!(a.range(), b.range()),
             (GlobalSection(a), GlobalSection(b)) => assert_eq!(a.range(), b.range()),
             (ExportSection(a), ExportSection(b)) => assert_eq!(a.range(), b.range()),
+            (TagSection(a), TagSection(b)) => assert_eq!(a.range(), b.range()),
             (StartSection { func: a, range: ar }, StartSection { func: b, range: br }) => {
                 assert_eq!(a, b);
                 assert_eq!(ar, br);
@@ -108,21 +118,11 @@ fuzz_target!(|data: Vec<Vec<u8>>| {
                 assert_eq!(ar, br);
             }
             (DataSection(a), DataSection(b)) => assert_eq!(a.range(), b.range()),
-            (
-                CustomSection {
-                    name: a,
-                    data_offset: ado,
-                    data: ad,
-                },
-                CustomSection {
-                    name: b,
-                    data_offset: bdo,
-                    data: bd,
-                },
-            ) => {
-                assert_eq!(a, b);
-                assert_eq!(ad, bd);
-                assert_eq!(ado, bdo);
+            (CustomSection(ca), CustomSection(cb)) => {
+                assert_eq!(ca.name(), cb.name());
+                assert_eq!(ca.data_offset(), cb.data_offset());
+                assert_eq!(ca.data(), cb.data());
+                assert_eq!(ca.range(), cb.range());
             }
             (
                 CodeSectionStart {
@@ -131,18 +131,6 @@ fuzz_target!(|data: Vec<Vec<u8>>| {
                     size: asz,
                 },
                 CodeSectionStart {
-                    count: b,
-                    range: br,
-                    size: bsz,
-                },
-            )
-            | (
-                ModuleCodeSectionStart {
-                    count: a,
-                    range: ar,
-                    size: asz,
-                },
-                ModuleCodeSectionStart {
                     count: b,
                     range: br,
                     size: bsz,
@@ -156,17 +144,54 @@ fuzz_target!(|data: Vec<Vec<u8>>| {
             (CodeSectionEntry(a), CodeSectionEntry(b)) => {
                 assert_eq!(a.get_binary_reader().range(), b.get_binary_reader().range());
             }
+
             (
-                ModuleCodeSectionEntry {
-                    range: ar,
-                    parser: ap,
+                ModuleSection {
+                    parser: p,
+                    range: a,
                 },
-                ModuleCodeSectionEntry { range: br, .. },
+                ModuleSection { range: b, .. },
             ) => {
-                assert_eq!(ar, br);
+                assert_eq!(a, b);
                 stack.push(parser);
-                parser = ap;
+                parser = p;
             }
+            (InstanceSection(a), InstanceSection(b)) => assert_eq!(a.range(), b.range()),
+            (AliasSection(a), AliasSection(b)) => assert_eq!(a.range(), b.range()),
+            (
+                ComponentSection {
+                    parser: p,
+                    range: a,
+                },
+                ComponentSection { range: b, .. },
+            ) => {
+                assert_eq!(a, b);
+                stack.push(parser);
+                parser = p;
+            }
+            (ComponentInstanceSection(a), ComponentInstanceSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+            (ComponentAliasSection(a), ComponentAliasSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+            (ComponentTypeSection(a), ComponentTypeSection(b)) => assert_eq!(a.range(), b.range()),
+            (ComponentCanonicalSection(a), ComponentCanonicalSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+            (ComponentStartSection(a), ComponentStartSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+            (ComponentImportSection(a), ComponentImportSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+            (ComponentExportSection(a), ComponentExportSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+            (CoreTypeSection(a), CoreTypeSection(b)) => {
+                assert_eq!(a.range(), b.range())
+            }
+
             (
                 UnknownSection {
                     id: a,
